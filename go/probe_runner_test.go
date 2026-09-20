@@ -330,7 +330,11 @@ func resetProbeRunner(t *testing.T) {
 		// otherwise silence every later case that touches that account.
 		probeAccountRest.mu.Lock()
 		probeAccountRest.until = make(map[string]time.Time)
+		probeAccountRest.reason = make(map[string]string)
 		probeAccountRest.mu.Unlock()
+		probeAccountAuthorization.mu.Lock()
+		probeAccountAuthorization.required = make(map[string]time.Time)
+		probeAccountAuthorization.mu.Unlock()
 		state.mu.Lock()
 		state.buckets = make(map[string]templateEntry)
 		state.store = nil

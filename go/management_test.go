@@ -2608,7 +2608,9 @@ func TestChoicesListsCPACredentialsAndMarksTheScope(t *testing.T) {
 		selected bool
 	}{
 		{"gpt-5.5", true},        // configured and in the fallback menu
+		{"gpt-5.6-luna", false},  // menu only
 		{"gpt-5.6-sol", false},   // menu only
+		{"gpt-5.6-terra", false}, // menu only
 		{"gpt-6-astra", false},   // menu only
 		{"gpt-local-only", true}, // configured by hand, unknown to the menu
 	}
@@ -2663,19 +2665,19 @@ func TestMaskAuthLabel(t *testing.T) {
 		{
 			name: "the normal codex-<hex>-<email>-<tier>.json shape",
 			in:   "codex-620f5a42-luo.swmu@gmail.com-pro.json",
-			want: "620f5a42…pro",
+			want: "620f5a42…pro · lu***mu@gmail.com · #0d46db",
 		},
 		{
 			name: "no email in the name at all",
 			in:   "codex-620f5a42-pro.json",
-			want: "620f5a42…pro",
+			want: "620f5a42…pro · #c600b7",
 		},
 		{
 			// An email containing a dash splits into parts, and the middle carries
 			// a tag nobody needs to see. First and last survive; the rest does not.
 			name: "extra dashes around the email",
 			in:   "codex-620f5a42-luo-swmu@gmail.com-team-pro.json",
-			want: "620f5a42…pro",
+			want: "620f5a42…pro · s***u@gmail.com · #446ae1",
 		},
 		{
 			name: "empty string",
@@ -2687,12 +2689,12 @@ func TestMaskAuthLabel(t *testing.T) {
 			// only then take first and last. The other order publishes the address.
 			name: "email in the final position",
 			in:   "codex-620f5a42-luo@gmail.com.json",
-			want: "620f5a42",
+			want: "620f5a42 · l***o@gmail.com · #765ed7",
 		},
 		{
 			name: "nothing but an email",
 			in:   "codex-luo@gmail.com.json",
-			want: "…",
+			want: "账号 · l***o@gmail.com · #cb043c",
 		},
 	}
 	for _, c := range cases {
@@ -2700,10 +2702,10 @@ func TestMaskAuthLabel(t *testing.T) {
 		if got != c.want {
 			t.Errorf("%s: maskAuthLabel(%q) = %q, want %q", c.name, c.in, got, c.want)
 		}
-		// Belt and braces, and cheap: whatever the shape, an "@" in a label means
-		// an address reached a page that needs no key.
-		if strings.Contains(got, "@") {
-			t.Errorf("%s: maskAuthLabel(%q) = %q, which still carries an email address", c.name, c.in, got)
+		// The local part must never be published intact. A masked address is useful
+		// enough to identify the row without exposing the credential filename.
+		if strings.Contains(got, "luo.swmu@") || strings.Contains(got, "luo@") || strings.Contains(got, "swmu@") {
+			t.Errorf("%s: maskAuthLabel(%q) = %q, which carries an unmasked email address", c.name, c.in, got)
 		}
 	}
 }

@@ -33,6 +33,7 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -41,7 +42,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -105,6 +108,13 @@ const (
 	// and the route that would (PATCH /v0/management/plugins/<id>/config) is
 	// authenticated -- a key in front of the one screen that must not need one.
 	routeOpsScope = "/ops/scope"
+	// routeOpsOnDemand saves the selected account whitelist, timeout and switch
+	// as one atomic dashboard operation.
+	routeOpsOnDemand = "/ops/on-demand"
+	// routeOpsTicket acquires one account/model ticket immediately. Unlike the
+	// background probe it is a single, explicit operator action and reports
+	// whether an existing ticket was reused or a new 292 was stored.
+	routeOpsTicket = "/ops/ticket"
 	// The probe runner's two controls, keyless like the rest of /ops and for the
 	// same reason: the whole point of running a probe from the dashboard is that
 	// nobody has to type a key to do it. The bearer the run itself needs comes
@@ -215,6 +225,8 @@ func managementRegister(raw []byte) ([]byte, error) {
 			// on every scope edit. routeConfig stays behind the key regardless --
 			// see the comment there.
 			{Path: routeOpsScope, Description: "保存探测范围（无需鉴权，需 confirm=1）"},
+			{Path: routeOpsOnDemand, Description: "保存并切换按需打票（无需鉴权，需 confirm=1）"},
+			{Path: routeOpsTicket, Description: "立即获取一个账号/模型的票（无需鉴权，需 confirm=1，烧额度）"},
 			// The probe runner's controls. Keyless and confirm=1 guarded like the
 			// rest of /ops; the run authenticates with the configured probe keys,
 			// so the operator never supplies one.
@@ -298,6 +310,8 @@ func managementHandle(raw []byte) ([]byte, error) {
 		hasRouteSuffix(path, routeOpsClear),
 		hasRouteSuffix(path, routeOpsSelftest),
 		hasRouteSuffix(path, routeOpsScope),
+		hasRouteSuffix(path, routeOpsOnDemand),
+		hasRouteSuffix(path, routeOpsTicket),
 		hasRouteSuffix(path, routeOpsProbeStart),
 		hasRouteSuffix(path, routeOpsProbeCancel),
 		hasRouteSuffix(path, routeOpsProxyCheck):
@@ -380,6 +394,10 @@ func handleOpsResource(path, method string, q url.Values) pluginapi.ManagementRe
 		return runSelftest(selftestRequestFromQuery(q))
 	case hasRouteSuffix(path, routeOpsScope):
 		return handleScopeSave(q)
+	case hasRouteSuffix(path, routeOpsOnDemand):
+		return handleOnDemandResource(q)
+	case hasRouteSuffix(path, routeOpsTicket):
+		return handleTicketAcquireResource(q)
 	case hasRouteSuffix(path, routeOpsProbeStart):
 		return handleProbeStartResource()
 	case hasRouteSuffix(path, routeOpsProbeCancel):
@@ -461,7 +479,13 @@ func handleProbeCancelResource() pluginapi.ManagementResponse {
 // complete.
 //
 // A var because Go has no constant slice; nothing writes to it.
-var knownCodexModels = []string{"gpt-5.5", "gpt-5.6-sol", "gpt-6-astra"}
+var knownCodexModels = []string{
+	"gpt-5.5",
+	"gpt-5.6-luna",
+	"gpt-5.6-sol",
+	"gpt-5.6-terra",
+	"gpt-6-astra",
+}
 
 // choicesFetchTimeout bounds the single CPA call this route makes.
 //
@@ -490,6 +514,8 @@ type choiceAccount struct {
 	// renders the saved scope rather than an empty form the operator would have to
 	// re-tick from memory.
 	Selected bool `json:"selected"`
+	// OnDemandSelected is independent from the legacy probe scope.
+	OnDemandSelected bool `json:"on_demand_selected"`
 }
 
 // choiceModel is one model checkbox.
@@ -586,16 +612,21 @@ func choiceAccounts(cfg pluginConfig) ([]choiceAccount, error) {
 	for _, name := range cfg.ProbeAccounts {
 		selected[strings.TrimSpace(name)] = true
 	}
+	onDemandSelected := make(map[string]bool, len(cfg.OnDemandAccounts))
+	for _, name := range cfg.OnDemandAccounts {
+		onDemandSelected[strings.TrimSpace(name)] = true
+	}
 
 	// listCodexAuths sorts by name, so the checkbox order is stable across
 	// refreshes without sorting again here.
 	out := make([]choiceAccount, 0, len(files))
 	for _, file := range files {
 		out = append(out, choiceAccount{
-			Name:     file.Name,
-			Label:    maskAuthLabel(file.Name),
-			Disabled: file.Disabled,
-			Selected: selected[file.Name],
+			Name:             file.Name,
+			Label:            maskAuthLabel(file.Name),
+			Disabled:         file.Disabled,
+			Selected:         selected[file.Name],
+			OnDemandSelected: onDemandSelected[file.Name],
 		})
 	}
 	return out, nil
@@ -665,6 +696,8 @@ func modelChoices(configured []string) []choiceModel {
 // not, unless it drops the @ parts before picking first and last. Anything that
 // merely abbreviates is fine for a log line, which is masked further downstream;
 // this one feeds a keyless HTTP response, where it is the last line of defence.
+var accountEmailPattern = regexp.MustCompile(`[A-Za-z0-9._%+]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}`)
+
 func maskAuthLabel(name string) string {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
@@ -682,6 +715,7 @@ func maskAuthLabel(name string) string {
 	if lower := strings.ToLower(body); strings.HasPrefix(lower, "codex-") {
 		body = body[len("codex-"):]
 	}
+	email := accountEmailPattern.FindString(body)
 
 	kept := make([]string, 0, 4)
 	for _, part := range strings.Split(body, "-") {
@@ -694,6 +728,7 @@ func maskAuthLabel(name string) string {
 		kept = append(kept, part)
 	}
 
+	var label string
 	switch len(kept) {
 	case 0:
 		// Everything was email-shaped. An ellipsis is a poor label, and it is the
@@ -701,16 +736,38 @@ func maskAuthLabel(name string) string {
 		// the one field we just decided not to show. The checkbox still works --
 		// `name` carries the value the page posts back -- so this costs legibility
 		// for one unusually named credential and nothing else.
-		return "…"
+		label = "账号"
 	case 1:
 		// One survivor is the whole label; joining it to itself would read as two
 		// fields where there is one.
-		return kept[0]
+		label = kept[0]
 	default:
 		// First and last, so a name with extra dashes in the middle still renders
 		// as the id and the tier rather than as an ever-growing string.
-		return kept[0] + "…" + kept[len(kept)-1]
+		label = kept[0] + "…" + kept[len(kept)-1]
 	}
+	// Some CPA installations use opaque names whose visible part is identical
+	// for every credential (for example authsess-<email>). A stable fingerprint
+	// keeps those rows distinguishable without publishing the email address.
+	sum := sha256.Sum256([]byte(trimmed))
+	if email != "" {
+		parts := strings.SplitN(email, "@", 2)
+		local := []rune(parts[0])
+		masked := "***@" + parts[1]
+		switch len(local) {
+		case 0:
+		case 1:
+			masked = string(local[0]) + "***@" + parts[1]
+		case 2:
+			masked = string(local[0]) + "***" + string(local[1]) + "@" + parts[1]
+		case 3, 4:
+			masked = string(local[0]) + "***" + string(local[len(local)-1]) + "@" + parts[1]
+		default:
+			masked = string(local[:2]) + "***" + string(local[len(local)-2:]) + "@" + parts[1]
+		}
+		return fmt.Sprintf("%s · %s · #%x", label, masked, sum[:3])
+	}
+	return fmt.Sprintf("%s · #%x", label, sum[:3])
 }
 
 // clearRequestFromQuery builds a clearRequest from the keyless clear route's
@@ -747,14 +804,17 @@ func handleDryRunResource(q url.Values) pluginapi.ManagementResponse {
 	state.mu.Lock()
 	cfg := state.config
 	cfg.DryRun = value
+	if cfg.OnDemand && value {
+		state.mu.Unlock()
+		return managementError(http.StatusConflict, "Disable on_demand before enabling dry_run")
+	}
 	swapConfigLocked(cfg)
 	dir := cfg.StoreDir
-	role := cfg.Role
 	state.mu.Unlock()
 
 	persisted := true
 	warning := ""
-	if err := writeRuntimeOverride(dir, role, value); err != nil {
+	if err := writeRuntimeOverride(dir, cfg); err != nil {
 		// The in-process change already took effect; only persistence failed, so a
 		// restart would revert it. Say so rather than report a clean success.
 		persisted = false
@@ -783,6 +843,10 @@ func handleRoleResource(q url.Values) pluginapi.ManagementResponse {
 		return managementError(http.StatusConflict, "role probe requires store_dir, which is not configured")
 	}
 	cfg.Role = role
+	if cfg.OnDemand && role == roleProbe {
+		state.mu.Unlock()
+		return managementError(http.StatusConflict, "Disable on_demand before switching to probe")
+	}
 	// Harvesting from business traffic is prohibited; mirror configure's guard so
 	// the keyless path cannot leave business with harvest_inband on.
 	if role == roleBusiness {
@@ -790,12 +854,11 @@ func handleRoleResource(q url.Values) pluginapi.ManagementResponse {
 	}
 	swapConfigLocked(cfg)
 	dir := cfg.StoreDir
-	dryRun := cfg.DryRun
 	state.mu.Unlock()
 
 	persisted := true
 	warning := ""
-	if err := writeRuntimeOverride(dir, role, dryRun); err != nil {
+	if err := writeRuntimeOverride(dir, cfg); err != nil {
 		persisted = false
 		warning = "restart will revert: " + err.Error()
 		log.Printf(logPrefix+"role set to %s but persisting the override failed: %v", role, err)
@@ -807,6 +870,88 @@ func handleRoleResource(q url.Values) pluginapi.ManagementResponse {
 		"persisted": persisted,
 		"warning":   warning,
 		"note":      "若切换后发现钩子没被重新协商（probe 采不到 / business 不替换），重启一次 CPA。",
+	})
+}
+
+// handleOnDemandResource changes the full on-demand policy in one operation so
+// the switch can never be enabled for a stale or half-saved account selection.
+func handleOnDemandResource(q url.Values) pluginapi.ManagementResponse {
+	enabled, ok := parseBoolParam(q.Get("value"))
+	if !ok {
+		return managementError(http.StatusBadRequest, `"value" must be on or off`)
+	}
+	state.mu.Lock()
+	maxAttempts := state.config.OnDemandMaxAttempts
+	state.mu.Unlock()
+	if raw := strings.TrimSpace(q.Get("attempts")); raw != "" {
+		var errAttempts error
+		maxAttempts, errAttempts = strconv.Atoi(raw)
+		if errAttempts != nil || maxAttempts < 1 || maxAttempts > 50 {
+			return managementError(http.StatusBadRequest, `"attempts" must be an integer between 1 and 50`)
+		}
+	}
+	timeout, errTimeout := strconv.Atoi(strings.TrimSpace(q.Get("timeout")))
+	if errTimeout != nil || timeout < 1 || timeout > 90 {
+		return managementError(http.StatusBadRequest, `"timeout" must be an integer between 1 and 90`)
+	}
+	accounts := make([]string, 0, len(q["account"]))
+	seen := make(map[string]bool, len(q["account"]))
+	for _, raw := range q["account"] {
+		name := strings.TrimSpace(raw)
+		if name == "" || seen[name] {
+			continue
+		}
+		seen[name] = true
+		accounts = append(accounts, name)
+	}
+	sort.Strings(accounts)
+	models := make([]string, 0, len(q["model"]))
+	seenModels := make(map[string]bool, len(q["model"]))
+	for _, raw := range q["model"] {
+		name := strings.TrimSpace(raw)
+		if name == "" || seenModels[name] {
+			continue
+		}
+		seenModels[name] = true
+		models = append(models, name)
+	}
+	sort.Strings(models)
+
+	state.mu.Lock()
+	cfg := state.config
+	cfg.OnDemand = enabled
+	cfg.OnDemandAccounts = accounts
+	cfg.OnDemandModels = models
+	cfg.OnDemandMaxAttempts = maxAttempts
+	cfg.OnDemandTimeoutSeconds = timeout
+	if enabled {
+		if err := validateDemandConfig(cfg); err != nil {
+			state.mu.Unlock()
+			return managementError(http.StatusConflict, err.Error())
+		}
+	}
+	swapConfigLocked(cfg)
+	dir := cfg.StoreDir
+	state.mu.Unlock()
+
+	if enabled {
+		probeRunCancel()
+	}
+	persisted := true
+	warning := ""
+	if err := writeRuntimeOverride(dir, cfg); err != nil {
+		persisted = false
+		warning = "restart will revert: " + err.Error()
+		log.Printf(logPrefix+"on_demand updated but persistence failed: %v", err)
+	} else {
+		log.Printf(logPrefix+"on_demand=%t accounts=%d models=%d attempts=%d timeout=%ds via dashboard", enabled, len(accounts), len(models), maxAttempts, timeout)
+	}
+	return jsonResponse(http.StatusOK, map[string]any{
+		"on_demand": enabled, "on_demand_accounts": accounts,
+		"on_demand_models":          models,
+		"on_demand_max_attempts":    maxAttempts,
+		"on_demand_timeout_seconds": timeout,
+		"persisted":                 persisted, "warning": warning,
 	})
 }
 
@@ -867,17 +1012,22 @@ type statusBucket struct {
 }
 
 type statusResponse struct {
-	Role           string         `json:"role"`
-	DryRun         bool           `json:"dry_run"`
-	InjectMode     string         `json:"inject_mode"`
-	TTLSeconds     int            `json:"ttl_seconds"`
-	TemplateLength int            `json:"template_length"`
-	ReplaceLength  int            `json:"replace_length"`
-	StoreDir       string         `json:"store_dir"`
-	Models         []string       `json:"models"`
-	Buckets        []statusBucket `json:"buckets"`
-	TargetsTotal   int            `json:"targets_total"`
-	TargetsReady   int            `json:"targets_ready"`
+	OnDemand               bool           `json:"on_demand"`
+	OnDemandAccounts       []string       `json:"on_demand_accounts"`
+	OnDemandModels         []string       `json:"on_demand_models"`
+	OnDemandMaxAttempts    int            `json:"on_demand_max_attempts"`
+	OnDemandTimeoutSeconds int            `json:"on_demand_timeout_seconds"`
+	Role                   string         `json:"role"`
+	DryRun                 bool           `json:"dry_run"`
+	InjectMode             string         `json:"inject_mode"`
+	TTLSeconds             int            `json:"ttl_seconds"`
+	TemplateLength         int            `json:"template_length"`
+	ReplaceLength          int            `json:"replace_length"`
+	StoreDir               string         `json:"store_dir"`
+	Models                 []string       `json:"models"`
+	Buckets                []statusBucket `json:"buckets"`
+	TargetsTotal           int            `json:"targets_total"`
+	TargetsReady           int            `json:"targets_ready"`
 	// AccountsSource is "host" when the credential list came from
 	// host.auth.list, and "store" when that was unavailable and the accounts
 	// were inferred from whatever the store already holds. The difference
@@ -936,6 +1086,13 @@ type statusResponse struct {
 	// here, which is the constraint on what the runner may put in Lines: progress
 	// and outcomes, never a key and never a template value.
 	ProbeRun probeRunState `json:"probe_run"`
+	// TicketActivity is a bounded, value-free activity log. It explains whether
+	// a request reused a saved ticket, acquired one, or failed, without ever
+	// returning the ticket itself.
+	TicketActivity []ticketActivity `json:"ticket_activity"`
+	// AccountBlocks distinguishes credentials that need reauthorization after
+	// HTTP 401 from temporary HTTP 403/429 cooldowns.
+	AccountBlocks []probeAccountBlockStatus `json:"account_blocks"`
 }
 
 // statusAccount is one credential row of the readiness matrix.
@@ -962,19 +1119,24 @@ func handleStatus() pluginapi.ManagementResponse {
 	state.mu.Unlock()
 
 	out := statusResponse{
-		Role:           cfg.Role,
-		DryRun:         cfg.DryRun,
-		InjectMode:     cfg.InjectMode,
-		TTLSeconds:     cfg.TTLSeconds,
-		TemplateLength: cfg.TemplateLength,
-		ReplaceLength:  cfg.ReplaceLength,
-		StoreDir:       cfg.StoreDir,
-		Models:         append([]string(nil), cfg.Models...),
-		Counters:       counts,
-		CountersSince:  countsAt.UTC().Format(time.RFC3339),
-		GeneratedAt:    now.UTC().Format(time.RFC3339),
-		Buckets:        []statusBucket{},
-		ProbeAccounts:  append([]string(nil), cfg.ProbeAccounts...),
+		OnDemand:               cfg.OnDemand,
+		OnDemandAccounts:       append([]string(nil), cfg.OnDemandAccounts...),
+		OnDemandModels:         append([]string(nil), cfg.OnDemandModels...),
+		OnDemandMaxAttempts:    cfg.OnDemandMaxAttempts,
+		OnDemandTimeoutSeconds: cfg.OnDemandTimeoutSeconds,
+		Role:                   cfg.Role,
+		DryRun:                 cfg.DryRun,
+		InjectMode:             cfg.InjectMode,
+		TTLSeconds:             cfg.TTLSeconds,
+		TemplateLength:         cfg.TemplateLength,
+		ReplaceLength:          cfg.ReplaceLength,
+		StoreDir:               cfg.StoreDir,
+		Models:                 append([]string(nil), cfg.Models...),
+		Counters:               counts,
+		CountersSince:          countsAt.UTC().Format(time.RFC3339),
+		GeneratedAt:            now.UTC().Format(time.RFC3339),
+		Buckets:                []statusBucket{},
+		ProbeAccounts:          append([]string(nil), cfg.ProbeAccounts...),
 		// Plaintext, at the operator's explicit instruction -- see the comment on
 		// the field. The count stays alongside it because the page reads it
 		// without having to count a list it may be rendering lazily.
@@ -988,7 +1150,9 @@ func handleStatus() pluginapi.ManagementResponse {
 		// reaching for it while holding this one is how two locks become a
 		// deadlock. Nothing above needs the two views to be consistent with each
 		// other.
-		ProbeRun: probeRunSnapshot(),
+		ProbeRun:       probeRunSnapshot(),
+		TicketActivity: ticketActivitySnapshot(),
+		AccountBlocks:  probeAccountBlockSnapshot(now),
 	}
 	if out.Models == nil {
 		out.Models = []string{}
@@ -1141,17 +1305,22 @@ func handleStatus() pluginapi.ManagementResponse {
 // refill, and a field here would be a secret one accidental resource alias away
 // from being anonymous.
 type configResponse struct {
-	Role           string   `json:"role"`
-	StoreDir       string   `json:"store_dir"`
-	Models         []string `json:"models"`
-	ProbeAccounts  []string `json:"probe_accounts"`
-	ProbeProxies   []string `json:"probe_proxies"`
-	DryRun         bool     `json:"dry_run"`
-	InjectMode     string   `json:"inject_mode"`
-	TTLSeconds     int      `json:"ttl_seconds"`
-	TemplateLength int      `json:"template_length"`
-	ReplaceLength  int      `json:"replace_length"`
-	ConfigErrors   []string `json:"config_errors,omitempty"`
+	OnDemand               bool     `json:"on_demand"`
+	OnDemandAccounts       []string `json:"on_demand_accounts"`
+	OnDemandModels         []string `json:"on_demand_models"`
+	OnDemandMaxAttempts    int      `json:"on_demand_max_attempts"`
+	OnDemandTimeoutSeconds int      `json:"on_demand_timeout_seconds"`
+	Role                   string   `json:"role"`
+	StoreDir               string   `json:"store_dir"`
+	Models                 []string `json:"models"`
+	ProbeAccounts          []string `json:"probe_accounts"`
+	ProbeProxies           []string `json:"probe_proxies"`
+	DryRun                 bool     `json:"dry_run"`
+	InjectMode             string   `json:"inject_mode"`
+	TTLSeconds             int      `json:"ttl_seconds"`
+	TemplateLength         int      `json:"template_length"`
+	ReplaceLength          int      `json:"replace_length"`
+	ConfigErrors           []string `json:"config_errors,omitempty"`
 }
 
 // handleConfig serves the editable configuration behind the management key.
@@ -1168,17 +1337,22 @@ func handleConfig() pluginapi.ManagementResponse {
 	state.mu.Unlock()
 
 	out := configResponse{
-		Role:           cfg.Role,
-		StoreDir:       cfg.StoreDir,
-		Models:         append([]string(nil), cfg.Models...),
-		ProbeAccounts:  append([]string(nil), cfg.ProbeAccounts...),
-		ProbeProxies:   append([]string(nil), cfg.ProbeProxies...),
-		DryRun:         cfg.DryRun,
-		InjectMode:     cfg.InjectMode,
-		TTLSeconds:     cfg.TTLSeconds,
-		TemplateLength: cfg.TemplateLength,
-		ReplaceLength:  cfg.ReplaceLength,
-		ConfigErrors:   configErrors,
+		OnDemand:               cfg.OnDemand,
+		OnDemandAccounts:       append([]string(nil), cfg.OnDemandAccounts...),
+		OnDemandModels:         append([]string(nil), cfg.OnDemandModels...),
+		OnDemandMaxAttempts:    cfg.OnDemandMaxAttempts,
+		OnDemandTimeoutSeconds: cfg.OnDemandTimeoutSeconds,
+		Role:                   cfg.Role,
+		StoreDir:               cfg.StoreDir,
+		Models:                 append([]string(nil), cfg.Models...),
+		ProbeAccounts:          append([]string(nil), cfg.ProbeAccounts...),
+		ProbeProxies:           append([]string(nil), cfg.ProbeProxies...),
+		DryRun:                 cfg.DryRun,
+		InjectMode:             cfg.InjectMode,
+		TTLSeconds:             cfg.TTLSeconds,
+		TemplateLength:         cfg.TemplateLength,
+		ReplaceLength:          cfg.ReplaceLength,
+		ConfigErrors:           configErrors,
 	}
 	if out.Models == nil {
 		out.Models = []string{}

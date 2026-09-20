@@ -15,6 +15,8 @@ plugins:
   enabled: true
   configs:
     codex-turn-state:
+      # 按请求缺票等待功能默认关闭；完整启用示例见 config.on-demand.example.yaml。
+      on_demand: false
       enabled: true
       priority: 100
 

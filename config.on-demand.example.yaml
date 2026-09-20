@@ -1,0 +1,37 @@
+# 合并到 CPA 的 config.yaml，勿覆盖其他插件的配置。
+# 插件编译产物放到 CPA 的 plugins.dir（不是 CPAMP 的目录），重启 CPA。
+plugins:
+  enabled: true
+  configs:
+    codex-turn-state:
+      enabled: true
+      priority: 100
+      # 新功能默认关闭。填妥账号、目录和管理密钥后，改成 true。
+      on_demand: false
+      on_demand_accounts:
+        - codex-REPLACE-WITH-EXACT-CREDENTIAL-FILENAME.json
+      # 只有这两个模型进入等待、打票和注入流程。其他模型（包括
+      # codex-auto-review 与 gpt-5.6-luna）直接按 CPA 原流程发送。
+      on_demand_models:
+        - gpt-5.6-sol
+        - gpt-6-astra
+      on_demand_max_attempts: 10
+      on_demand_timeout_seconds: 90
+      role: business
+      dry_run: false
+      # 按需模式忽略 replace-only，始终注入有效 292；关闭后恢复此设置。
+      inject_mode: replace-only
+      template_length: 292
+      replace_length: 312
+      ttl_seconds: 3600
+      store_dir: /data/turn-state-store
+      probe_base_url: http://127.0.0.1:8317
+      probe_management_key: "REPLACE-WITH-CPA-MANAGEMENT-KEY"
+      # 按需模式只读取本次请求选中账号的凭证，不刷新或修改凭证。
+      # models 是旧版主动探测范围；按需模式使用上面的 on_demand_models。
+      probe_accounts: []
+      models: []
+      probe_proxies: []
+      probe_proxies_rotating: []
+      harvest_inband: false
+      log_decisions: true

@@ -124,8 +124,8 @@ const indexFileName = "index.json"
 // storeIndexVersion tags the on-disk index format.
 const storeIndexVersion = 1
 
-// runtimeOverrideFileName holds the two fields the dashboard can change without a
-// management key: role and dry_run. It lives in the store dir and is layered over
+// runtimeOverrideFileName holds the fields the dashboard can change without a
+// management key. It lives in the store dir and is layered over
 // the config-file values on every configure. It exists so a change made from the
 // keyless dashboard survives the CPA restart that a role switch requires anyway
 // (capability renegotiation); without it, a restart would silently revert role
@@ -263,6 +263,12 @@ func templateUsable(issuedAt, now time.Time, ttl time.Duration) bool {
 }
 
 type pluginConfig struct {
+	// Opt-in: wait for a valid ticket before selected accounts execute.
+	OnDemand               bool     `yaml:"on_demand"`
+	OnDemandAccounts       []string `yaml:"on_demand_accounts"`
+	OnDemandModels         []string `yaml:"on_demand_models"`
+	OnDemandMaxAttempts    int      `yaml:"on_demand_max_attempts"`
+	OnDemandTimeoutSeconds int      `yaml:"on_demand_timeout_seconds"`
 	// Role is "probe" or "business". Empty means "business": that is the role
 	// that neither writes the store nor harvests, so a plugin deployed before
 	// its config is updated does nothing rather than something surprising.
@@ -360,16 +366,18 @@ const defaultProbeBaseURL = "http://127.0.0.1:8317"
 
 func defaultConfig() pluginConfig {
 	return pluginConfig{
-		Role:           "",
-		StoreDir:       "",
-		TemplateLength: 292,
-		ReplaceLength:  312,
-		TTLSeconds:     3600,
-		HarvestInband:  false,
-		InjectMode:     "replace-only",
-		DryRun:         false,
-		LogDecisions:   true,
-		ProbeBaseURL:   defaultProbeBaseURL,
+		Role:                   "",
+		StoreDir:               "",
+		TemplateLength:         292,
+		ReplaceLength:          312,
+		TTLSeconds:             3600,
+		HarvestInband:          false,
+		InjectMode:             "replace-only",
+		DryRun:                 false,
+		LogDecisions:           true,
+		ProbeBaseURL:           defaultProbeBaseURL,
+		OnDemandMaxAttempts:    int(defaultTicketAcquireMaxAttempts),
+		OnDemandTimeoutSeconds: 90,
 	}
 }
 
@@ -694,8 +702,8 @@ func configure(raw []byte) error {
 		}
 	}
 
-	// Layer the keyless dashboard override on top of the config-file values.
-	// role and dry_run are the two fields the dashboard changes without a
+	// Layer the dashboard override on top of the config-file values.
+	// These are the fields the dashboard changes without a
 	// management key; persisting and re-applying them here is what lets a flip
 	// survive the CPA restart a role change requires. The override only carries a
 	// field the operator actually set, so an untouched field keeps its
@@ -708,6 +716,21 @@ func configure(raw []byte) error {
 		}
 		if ov.DryRun != nil {
 			cfg.DryRun = *ov.DryRun
+		}
+		if ov.OnDemand != nil {
+			cfg.OnDemand = *ov.OnDemand
+		}
+		if ov.OnDemandAccounts != nil {
+			cfg.OnDemandAccounts = append([]string(nil), (*ov.OnDemandAccounts)...)
+		}
+		if ov.OnDemandModels != nil {
+			cfg.OnDemandModels = append([]string(nil), (*ov.OnDemandModels)...)
+		}
+		if ov.OnDemandMaxAttempts != nil {
+			cfg.OnDemandMaxAttempts = *ov.OnDemandMaxAttempts
+		}
+		if ov.OnDemandTimeoutSeconds != nil {
+			cfg.OnDemandTimeoutSeconds = *ov.OnDemandTimeoutSeconds
 		}
 	}
 
@@ -724,12 +747,23 @@ func configure(raw []byte) error {
 		return fmt.Errorf("role must be %q or %q, got %q", roleProbe, roleBusiness, cfg.Role)
 	}
 	cfg.Role = role
+	if cfg.OnDemandMaxAttempts < 1 || cfg.OnDemandMaxAttempts > 50 {
+		return fmt.Errorf("on_demand_max_attempts must be between 1 and 50")
+	}
+	if cfg.OnDemandTimeoutSeconds < 1 || cfg.OnDemandTimeoutSeconds > 90 {
+		return fmt.Errorf("on_demand_timeout_seconds must be between 1 and 90")
+	}
 	cfg.StoreDir = strings.TrimSpace(cfg.StoreDir)
 	// Trimmed for the same reason store_dir is: a YAML value that picked up a
 	// trailing newline or a stray space would be sent as part of the bearer and
 	// come back as a 401, which reads as "the key is wrong" rather than "the key
 	// has whitespace on it".
 	cfg.ProbeManagementKey = strings.TrimSpace(cfg.ProbeManagementKey)
+	if cfg.OnDemand {
+		if err := validateDemandConfig(cfg); err != nil {
+			return err
+		}
+	}
 	// An explicitly empty probe_base_url is pinned to the default rather than left
 	// empty: an absent key already yields the default (defaultConfig supplies it
 	// before the unmarshal), so letting `probe_base_url: ""` mean something
@@ -821,6 +855,9 @@ func configure(raw []byte) error {
 
 	if forcedInband {
 		log.Printf(logPrefix + "config error: harvest_inband is not allowed for role=business, forced to false")
+	}
+	if cfg.OnDemand {
+		probeRunCancel()
 	}
 	templates := "templates kept"
 	if cleared {
@@ -940,6 +977,11 @@ func pluginRegistration() registration {
 			Author:           "arden-aaai",
 			GitHubRepository: "https://github.com/arden-aaai/cpa-plugin-codex-turn-state",
 			ConfigFields: []pluginapi.ConfigField{
+				{Name: "on_demand", Type: pluginapi.ConfigFieldTypeBoolean, Description: "默认关闭。开启后只对 on_demand_accounts 中的账号按请求打票；无有效 292 则等待，失败拒绝业务请求。关闭后台探测。"},
+				{Name: "on_demand_accounts", Type: pluginapi.ConfigFieldTypeArray, Description: "按需模式的账号白名单，填写 CPA 凭证完整文件名。开启时不能为空；名单外账号不采集、不注入。模型取实际执行模型，绝不跨账号或模型复用。"},
+				{Name: "on_demand_models", Type: pluginapi.ConfigFieldTypeArray, Description: "按需模式的模型白名单。名单外模型不等待、不打票、不注入；留空兼容旧配置，表示全部模型。"},
+				{Name: "on_demand_max_attempts", Type: pluginapi.ConfigFieldTypeInteger, Description: "单次业务请求或手动打票最多请求上游的次数。默认 10，范围 1–50。"},
+				{Name: "on_demand_timeout_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "按需打票兜底等待时间，包含排队、读取凭证和代理重试。默认 90 秒，范围 1–90 秒。"},
 				{
 					Name:        "role",
 					Type:        pluginapi.ConfigFieldTypeEnum,
@@ -1039,6 +1081,9 @@ func interceptAfterAuth(raw []byte) ([]byte, error) {
 	// stored template here would hand the upstream a state it has already
 	// issued, and the fresh 292 the probe exists to collect would never be
 	// minted.
+	if cfg.OnDemand {
+		return interceptOnDemand(req, cfg)
+	}
 	if cfg.isProbe() {
 		return noop()
 	}
@@ -1289,6 +1334,11 @@ func recallRequestAuth(requestID string) string {
 // "the probe ran and the bucket stayed empty" is the failure mode that costs a
 // whole probing window.
 func harvestFromResponse(cfg pluginConfig, headers http.Header, metadata map[string]any, model, requestID string) {
+	// On-demand mode learns only from its own credential-bound acquisition.
+	// Legacy passive collection must not fill unselected accounts' buckets.
+	if cfg.OnDemand {
+		return
+	}
 	value := headerValue(headers, turnStateHeader)
 	if value == "" {
 		return
@@ -1415,6 +1465,7 @@ func harvestFromResponse(cfg pluginConfig, headers http.Header, metadata map[str
 	state.mu.Lock()
 	state.buckets[key] = templateEntry{value: value, issuedAt: issued}
 	state.mu.Unlock()
+	recordTicketActivity("passive", "acquired", authID, model, "从正常业务响应中保存了 292 票", value)
 
 	// Inferred attributions are logged differently on purpose. "This bucket
 	// belongs to account X" and "this bucket belongs to the only account that
@@ -1644,13 +1695,18 @@ func atomicWrite(path string, data []byte) error {
 	return os.Rename(name, path)
 }
 
-// runtimeOverride is the persisted form of the two dashboard-settable fields.
+// runtimeOverride is the persisted form of the dashboard-settable fields.
 // Both are pointers so "absent" is distinct from "set to the zero value": a file
 // that only ever recorded a dry_run flip must not also assert role="" (business)
 // and silently switch the role. Only a field that was actually written is applied.
 type runtimeOverride struct {
-	Role   *string `json:"role,omitempty"`
-	DryRun *bool   `json:"dry_run,omitempty"`
+	Role                   *string   `json:"role,omitempty"`
+	DryRun                 *bool     `json:"dry_run,omitempty"`
+	OnDemand               *bool     `json:"on_demand,omitempty"`
+	OnDemandAccounts       *[]string `json:"on_demand_accounts,omitempty"`
+	OnDemandModels         *[]string `json:"on_demand_models,omitempty"`
+	OnDemandMaxAttempts    *int      `json:"on_demand_max_attempts,omitempty"`
+	OnDemandTimeoutSeconds *int      `json:"on_demand_timeout_seconds,omitempty"`
 }
 
 // readRuntimeOverride loads the dashboard override from dir. A missing file is the
@@ -1672,7 +1728,8 @@ func readRuntimeOverride(dir string) (runtimeOverride, bool) {
 		log.Printf(logPrefix+"ignoring malformed %s: %v", runtimeOverrideFileName, errUnmarshal)
 		return runtimeOverride{}, false
 	}
-	if ov.Role == nil && ov.DryRun == nil {
+	if ov.Role == nil && ov.DryRun == nil && ov.OnDemand == nil &&
+		ov.OnDemandAccounts == nil && ov.OnDemandModels == nil && ov.OnDemandMaxAttempts == nil && ov.OnDemandTimeoutSeconds == nil {
 		return runtimeOverride{}, false
 	}
 	return ov, true
@@ -1681,12 +1738,20 @@ func readRuntimeOverride(dir string) (runtimeOverride, bool) {
 // writeRuntimeOverride records the dashboard's current role and dry_run so a
 // restart keeps them. It always writes both fields as a full snapshot of what the
 // dashboard controls, so a later role flip cannot lose an earlier dry_run flip.
-func writeRuntimeOverride(dir string, role string, dryRun bool) error {
+func writeRuntimeOverride(dir string, cfg pluginConfig) error {
 	dir = strings.TrimSpace(dir)
 	if dir == "" {
 		return fmt.Errorf("store_dir is empty, cannot persist the dashboard override")
 	}
-	ov := runtimeOverride{Role: &role, DryRun: &dryRun}
+	role, dryRun := cfg.Role, cfg.DryRun
+	onDemand, maxAttempts, timeout := cfg.OnDemand, cfg.OnDemandMaxAttempts, cfg.OnDemandTimeoutSeconds
+	accounts := append([]string(nil), cfg.OnDemandAccounts...)
+	models := append([]string(nil), cfg.OnDemandModels...)
+	ov := runtimeOverride{
+		Role: &role, DryRun: &dryRun,
+		OnDemand: &onDemand, OnDemandAccounts: &accounts, OnDemandModels: &models,
+		OnDemandMaxAttempts: &maxAttempts, OnDemandTimeoutSeconds: &timeout,
+	}
 	data, errMarshal := json.MarshalIndent(ov, "", "  ")
 	if errMarshal != nil {
 		return errMarshal

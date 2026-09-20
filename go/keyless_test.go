@@ -16,6 +16,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -28,6 +29,8 @@ const (
 	opsRolePath     = mgmtResourcePath + "ops/role"
 	opsClearPath    = mgmtResourcePath + "ops/clear"
 	opsSelftestPath = mgmtResourcePath + "ops/selftest"
+	opsOnDemandPath = mgmtResourcePath + "ops/on-demand"
+	opsTicketPath   = mgmtResourcePath + "ops/ticket"
 )
 
 // driveResource drives one resource (unauthenticated, GET) request with a query,
@@ -101,7 +104,7 @@ func TestKeylessRoutesRegisteredUnauthenticated(t *testing.T) {
 		routePaths[r.Path] = true
 	}
 
-	for _, p := range []string{"/ops/dry-run", "/ops/role", "/ops/clear", "/ops/selftest"} {
+	for _, p := range []string{"/ops/dry-run", "/ops/role", "/ops/clear", "/ops/selftest", "/ops/on-demand", "/ops/ticket"} {
 		res, ok := resourcePaths[p]
 		if !ok {
 			t.Errorf("%s is not registered as a resource; a keyless action must be, or it would still demand a management key", p)
@@ -121,6 +124,61 @@ func TestKeylessRoutesRegisteredUnauthenticated(t *testing.T) {
 		if strings.HasSuffix(r.Path, "/config") {
 			t.Errorf("config route %q is registered as a resource; it emits proxy secrets and must stay behind the key", r.Path)
 		}
+	}
+}
+
+func TestDashboardCanPersistAndToggleOnDemand(t *testing.T) {
+	dir := t.TempDir()
+	cfg := businessConfig(dir, false)
+	cfg += "probe_management_key: test-key\n"
+	mustConfigure(t, cfg)
+
+	q := confirmed(url.Values{
+		"value":    {"on"},
+		"attempts": {"7"},
+		"timeout":  {"37"},
+		"account":  {"codex-one.json", "codex-two.json"},
+		"model":    {"gpt-5.6-sol", "gpt-6-astra"},
+	})
+	resp := driveResource(t, opsOnDemandPath, q)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("enable on-demand returned %d: %s", resp.StatusCode, resp.Body)
+	}
+	state.mu.Lock()
+	got := state.config
+	state.mu.Unlock()
+	if !got.OnDemand || got.OnDemandMaxAttempts != 7 || got.OnDemandTimeoutSeconds != 37 || len(got.OnDemandAccounts) != 2 ||
+		!reflect.DeepEqual(got.OnDemandModels, []string{"gpt-5.6-sol", "gpt-6-astra"}) {
+		t.Fatalf("on-demand config = enabled=%v attempts=%d timeout=%d accounts=%v models=%v", got.OnDemand, got.OnDemandMaxAttempts, got.OnDemandTimeoutSeconds, got.OnDemandAccounts, got.OnDemandModels)
+	}
+	ov := readOverrideFile(t, dir)
+	if ov.OnDemand == nil || !*ov.OnDemand || ov.OnDemandAccounts == nil || len(*ov.OnDemandAccounts) != 2 ||
+		ov.OnDemandModels == nil || !reflect.DeepEqual(*ov.OnDemandModels, []string{"gpt-5.6-sol", "gpt-6-astra"}) ||
+		ov.OnDemandMaxAttempts == nil || *ov.OnDemandMaxAttempts != 7 {
+		t.Fatalf("runtime override did not persist on-demand settings: %+v", ov)
+	}
+
+	resp = driveResource(t, opsOnDemandPath, confirmed(url.Values{
+		"value": {"off"}, "attempts": {"12"}, "timeout": {"45"}, "account": {"codex-two.json"},
+	}))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("disable on-demand returned %d: %s", resp.StatusCode, resp.Body)
+	}
+	state.mu.Lock()
+	got = state.config
+	state.mu.Unlock()
+	if got.OnDemand || got.OnDemandMaxAttempts != 12 || got.OnDemandTimeoutSeconds != 45 || len(got.OnDemandAccounts) != 1 {
+		t.Fatalf("disabled config was not saved: %+v", got)
+	}
+}
+
+func TestDashboardRefusesOnDemandWithoutAnAccount(t *testing.T) {
+	dir := t.TempDir()
+	cfg := businessConfig(dir, false) + "probe_management_key: test-key\n"
+	mustConfigure(t, cfg)
+	resp := driveResource(t, opsOnDemandPath, confirmed(url.Values{"value": {"on"}, "timeout": {"90"}}))
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("enable without accounts returned %d, want 409", resp.StatusCode)
 	}
 }
 
@@ -316,7 +374,10 @@ func TestKeylessClearAll(t *testing.T) {
 // first configure -- the deploy-then-restart order -- must take effect.
 func TestRuntimeOverrideLayeredOnConfigure(t *testing.T) {
 	dir := t.TempDir()
-	if err := writeRuntimeOverride(dir, roleBusiness, false); err != nil {
+	cfg := defaultConfig()
+	cfg.Role = roleBusiness
+	cfg.DryRun = false
+	if err := writeRuntimeOverride(dir, cfg); err != nil {
 		t.Fatalf("writeRuntimeOverride: %v", err)
 	}
 	// config.yaml says role: probe, dry_run: true. The override says business/false.

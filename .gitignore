@@ -1,5 +1,8 @@
 build/
 .gocache/
+.gopath/
+.tools/
+.audit-cpa/
 
 # Build artifacts. The deployable .so is produced by scripts/build.sh into
 # build/, never committed -- it is platform-specific and ~12MB.

@@ -48,12 +48,12 @@
 <title>codex-turn-state</title>
 <style>
 :root {
-  --bg: #ffffff;
+  --bg: #f4f7fb;
   --fg: #16181d;
   --muted: #6b7280;
   --faint: #9aa1ab;
   --border: #e0e3e8;
-  --card: #f7f8fa;
+  --card: #ffffff;
   --raised: #ffffff;
   --ok: #0a7d33;
   --ok-bg: #e7f5ec;
@@ -63,17 +63,17 @@
   --bad-bg: #fdecea;
   --accent: #1a56db;
   --accent-bg: #e8f0fe;
-  --shadow: 0 2px 8px rgba(0,0,0,.09);
+  --shadow: 0 10px 30px rgba(27, 39, 65, .08);
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #14161a;
+    --bg: #0c111b;
     --fg: #e6e8ec;
     --muted: #9aa1ab;
     --faint: #6b7280;
     --border: #2b2f36;
-    --card: #1a1d22;
-    --raised: #1f232a;
+    --card: #121a28;
+    --raised: #182233;
     --ok: #4ade80;
     --ok-bg: #12291b;
     --warn: #fbbf24;
@@ -88,24 +88,26 @@
 * { box-sizing: border-box; }
 html, body { margin: 0; padding: 0; }
 body {
-  background: var(--bg);
+  background:
+    radial-gradient(circle at 20% -10%, rgba(26,86,219,.10), transparent 34rem),
+    var(--bg);
   color: var(--fg);
   font: 14px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", "Noto Sans CJK SC", "Microsoft YaHei", sans-serif;
-  padding: 18px;
+  padding: 32px 24px 56px;
 }
 code, .mono, td.cell, th.model, .kv b {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace;
 }
-h1 { font-size: 17px; margin: 0; font-weight: 650; letter-spacing: .2px; }
-h2 { font-size: 13px; margin: 0 0 8px; font-weight: 650; color: var(--muted);
-     text-transform: uppercase; letter-spacing: .6px; }
-.wrap { max-width: 1100px; margin: 0 auto; }
+h1 { font-size: 20px; margin: 0; font-weight: 760; letter-spacing: -.35px; }
+.subtitle { color: var(--muted); font-size: 13px; margin-top: 3px; }
+h2 { font-size: 15px; margin: 0 0 10px; font-weight: 700; color: var(--fg); }
+.wrap { max-width: 1120px; margin: 0 auto; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .spacer { flex: 1 1 auto; }
-section { margin-bottom: 18px; }
+section { margin-bottom: 22px; }
 .card {
   background: var(--card); border: 1px solid var(--border);
-  border-radius: 8px; padding: 12px 14px;
+  border-radius: 16px; padding: 22px 24px; box-shadow: var(--shadow);
 }
 
 /* ---------- 模态里的文本输入（确认对话框用，不是登录门） ---------- */
@@ -118,11 +120,14 @@ section { margin-bottom: 18px; }
 #modalInput:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
 
 /* ---------- 顶栏 ---------- */
-header.bar { margin-bottom: 14px; }
+header.bar { margin-bottom: 22px; padding: 0 2px; }
+.brand { display: flex; align-items: center; gap: 11px; }
+.brandmark { width: 34px; height: 34px; display: grid; place-items: center; border-radius: 10px;
+  color: #fff; background: linear-gradient(145deg, #2563eb, #1646b8); box-shadow: 0 6px 16px rgba(37,99,235,.25); font-weight: 800; }
 .badges { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
 .badge {
   display: inline-flex; align-items: baseline; gap: 6px;
-  padding: 4px 9px; border-radius: 6px; border: 1px solid var(--border);
+  padding: 5px 10px; border-radius: 999px; border: 1px solid var(--border);
   background: var(--raised); font-size: 12px;
 }
 .badge span { color: var(--muted); }
@@ -141,6 +146,97 @@ header.bar { margin-bottom: 14px; }
 .badge.open b { color: var(--muted); font-weight: 600; }
 .freshness { font-size: 12px; color: var(--muted); text-align: right; }
 .freshness.stale { color: var(--bad); }
+
+/* ---------- 按需打票：首页唯一的主任务 ---------- */
+.demand-card { overflow: hidden; padding: 0; border-color: rgba(70,112,210,.35); }
+.demand-hero { padding: 28px 30px 24px; background: linear-gradient(135deg, rgba(37,99,235,.11), rgba(37,99,235,.025) 55%, transparent); border-bottom: 1px solid var(--border); }
+.demand-head { display: flex; gap: 24px; align-items: center; }
+.demand-copy { flex: 1 1 560px; }
+.eyebrow { color: var(--accent); font-size: 11px; font-weight: 800; letter-spacing: .11em; text-transform: uppercase; margin-bottom: 7px; }
+.demand-copy h2 { margin: 0 0 7px; font-size: 22px; letter-spacing: -.35px; }
+.demand-copy p { margin: 0; color: var(--muted); font-size: 14px; max-width: 700px; }
+.switchline { display: flex; align-items: center; gap: 11px; font-weight: 750; padding: 10px 13px; border: 1px solid var(--border); border-radius: 999px; background: var(--card); white-space: nowrap; }
+.switch { position: relative; width: 50px; height: 28px; display: inline-block; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch span { position: absolute; inset: 0; border-radius: 999px; cursor: pointer;
+  background: var(--border); transition: .18s; }
+.switch span:before { content: ""; position: absolute; width: 22px; height: 22px;
+  left: 3px; top: 3px; border-radius: 50%; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,.25); transition: .18s; }
+.switch input:checked + span { background: var(--accent); }
+.switch input:checked + span:before { transform: translateX(22px); }
+.request-flow { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 22px; }
+.flow-step { position: relative; padding: 11px 13px 11px 42px; border: 1px solid var(--border); border-radius: 10px; background: rgba(255,255,255,.55); font-size: 12px; color: var(--muted); }
+.flow-step b { display: block; color: var(--fg); font-size: 13px; margin-bottom: 1px; }
+.flow-step .num { position: absolute; left: 12px; top: 13px; width: 21px; height: 21px; display: grid; place-items: center; border-radius: 50%; color: var(--accent); background: var(--accent-bg); font-size: 11px; font-weight: 800; }
+@media (prefers-color-scheme: dark) { .flow-step { background: rgba(255,255,255,.025); } }
+.demand-grid { display: grid; grid-template-columns: minmax(520px, 1.45fr) minmax(260px, .55fr); gap: 28px; padding: 26px 30px; }
+.demand-pickers { display: grid; grid-template-columns: minmax(260px, 1.25fr) minmax(190px, .75fr); gap: 18px; }
+.demand-side { display: flex; flex-direction: column; gap: 16px; }
+.step-label { display: flex; align-items: center; gap: 9px; font-size: 14px; font-weight: 750; margin-bottom: 10px; }
+.step-label .step-num { width: 24px; height: 24px; display: grid; place-items: center; border-radius: 7px; background: var(--accent-bg); color: var(--accent); font-size: 12px; }
+.field label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 5px; }
+.field input { width: 100%; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border);
+  background: var(--raised); color: var(--fg); font: inherit; }
+.behavior-box { border: 1px solid var(--border); border-radius: 12px; padding: 14px 15px; background: var(--raised); }
+.behavior-title { font-weight: 750; font-size: 13px; margin-bottom: 8px; }
+.behavior-line { display: flex; gap: 8px; align-items: flex-start; color: var(--muted); font-size: 12px; margin-top: 7px; }
+.behavior-line i { width: 18px; height: 18px; flex: 0 0 18px; display: grid; place-items: center; border-radius: 50%; background: var(--ok-bg); color: var(--ok); font-style: normal; font-size: 11px; font-weight: 800; }
+.behavior-line.warn i { background: var(--warn-bg); color: var(--warn); }
+.demand-actions { display: flex; gap: 12px; align-items: center; padding: 0 30px 26px; }
+.demand-actions .primary { min-width: 168px; padding: 9px 18px; }
+#demandAccounts, #demandModels { max-height: 300px; padding: 8px; border-radius: 12px; }
+#demandAccounts .check, #demandModels .check { padding: 11px 12px; border: 1px solid transparent; border-radius: 9px; align-items: center; cursor: pointer; }
+#demandAccounts .check:hover, #demandModels .check:hover { background: var(--accent-bg); }
+#demandAccounts .check:has(input:checked), #demandModels .check:has(input:checked) { border-color: var(--accent); background: var(--accent-bg); }
+#demandAccounts .check input, #demandModels .check input { width: 17px; height: 17px; accent-color: var(--accent); }
+#demandAccounts .check span, #demandModels .check span { font-family: inherit; font-size: 13px; font-weight: 600; }
+#demandDirty { min-height: 18px; }
+.manual-card { display: grid; grid-template-columns: minmax(260px, .8fr) minmax(420px, 1.2fr); gap: 28px; align-items: center; }
+.manual-card h2 { margin: 0 0 7px; }
+.manual-card .lead { margin-bottom: 0; max-width: 520px; }
+.manual-form { display: grid; grid-template-columns: minmax(190px, 1.3fr) minmax(150px, 1fr) auto auto; gap: 10px; align-items: end; }
+.manual-form .field select { width: 100%; min-height: 35px; }
+.manual-form .btn { min-height: 35px; white-space: nowrap; }
+.manual-result { grid-column: 1 / -1; min-height: 20px; margin-top: 1px; font-size: 12.5px; color: var(--muted); }
+.manual-result.ok { color: var(--ok); }
+.manual-result.err { color: var(--bad); }
+.manual-result.warn { color: var(--warn); }
+.activity-list { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.activity-empty { color: var(--muted); font-size: 13px; padding: 18px; text-align: center; }
+.activity-row { display: grid; grid-template-columns: 74px minmax(180px, .9fr) minmax(130px, .7fr) minmax(190px, 1.4fr); gap: 12px; align-items: center; padding: 11px 13px; border-top: 1px solid var(--border); font-size: 12.5px; }
+.activity-row:first-child { border-top: 0; }
+.activity-when, .activity-meta { color: var(--muted); }
+.activity-account { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.activity-event { display: flex; align-items: center; gap: 8px; }
+.activity-pill { flex: 0 0 auto; border-radius: 999px; padding: 2px 8px; font-size: 11px; font-weight: 750; border: 1px solid var(--border); }
+.activity-pill.ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
+.activity-pill.err { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
+.activity-message { overflow-wrap: anywhere; }
+.system-status { margin-top: 14px; }
+.system-status > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+.system-status .badges { margin-top: 10px; }
+.advanced { margin-bottom: 14px; }
+.advanced > summary { cursor: pointer; list-style: none; color: var(--muted); font-weight: 700;
+  padding: 14px 2px; user-select: none; }
+.advanced > summary::-webkit-details-marker { display: none; }
+.advanced > summary:before { content: "›"; display: inline-block; margin-right: 8px; transition: transform .15s; }
+.advanced[open] > summary:before { transform: rotate(90deg); }
+.advanced > section { margin: 0; }
+@media (max-width: 760px) {
+  body { padding: 14px; }
+  .demand-grid { grid-template-columns: 1fr; }
+  .demand-pickers { grid-template-columns: 1fr; }
+  .demand-hero, .demand-grid { padding-left: 18px; padding-right: 18px; }
+  .demand-actions { padding-left: 18px; padding-right: 18px; }
+  .demand-head { align-items: flex-start; flex-direction: column; }
+  .request-flow { grid-template-columns: 1fr; }
+  .manual-card { grid-template-columns: 1fr; gap: 18px; }
+  .manual-form { grid-template-columns: 1fr; }
+  .activity-row { grid-template-columns: 68px 1fr; }
+  .activity-account, .activity-meta { grid-column: 2; }
+  .card { padding: 15px; }
+  .demand-card { padding: 0; }
+}
 
 /* ---------- 桶矩阵 ---------- */
 .summary { font-size: 13px; color: var(--muted); margin-bottom: 8px; }
@@ -368,169 +464,191 @@ select {
 <div id="app" class="wrap">
   <header class="bar">
     <div class="row">
-      <h1>codex-turn-state</h1>
+      <div class="brand">
+        <div class="brandmark">T</div>
+        <div>
+          <h1>请求票管理</h1>
+          <div class="subtitle">每个账号、每个模型使用各自的有效票</div>
+        </div>
+      </div>
       <div class="spacer"></div>
       <div class="freshness" id="freshness"></div>
       <button class="btn" id="btnPause" type="button">暂停刷新</button>
     </div>
-    <div class="badges" id="badges"></div>
+    <details class="system-status">
+      <summary>查看插件运行参数</summary>
+      <div class="badges" id="badges"></div>
+    </details>
   </header>
 
   <div id="notices"></div>
 
   <section>
-    <h2>探测范围</h2>
-    <div class="card">
-      <div class="lead">
-        这三项只决定下一轮探测去采哪些桶 —— <b>不影响业务端替不替换</b>：业务只看
-        store 里有没有对应的桶。把某个账号从名单里去掉，不等于业务不给它替换，
-        只等于没人再给它采；桶过期之后它就自然停了。
-      </div>
-      <div class="scopegrid">
-        <div class="scopecol">
-          <div class="scopehead">
-            <span class="sublabel">账号</span>
-            <span class="hint" id="scopeAcctNote"></span>
+    <div class="card demand-card">
+      <div class="demand-hero">
+        <div class="demand-head">
+          <div class="demand-copy">
+            <div class="eyebrow">On-demand ticket</div>
+            <h2>请求缺票时，先获取有效票再转发</h2>
+            <p>只在选中账号收到选中模型的业务请求时工作。未选模型直接放行；已有未过期的票会复用，账号空闲时不会获取或续票。</p>
           </div>
-          <div class="checks" id="scopeAccounts"></div>
-        </div>
-        <div class="scopecol">
-          <div class="scopehead">
-            <span class="sublabel">模型</span>
-            <span class="hint" id="scopeModelNote"></span>
-          </div>
-          <div class="checks" id="scopeModels"></div>
-          <div class="row addrow">
-            <input id="scopeModelAdd" type="text" spellcheck="false" autocomplete="off"
-                   placeholder="补一个模型 id" aria-label="补充一个模型 id">
-            <button class="btn ghost" id="btnAddModel" type="button">加进清单</button>
-          </div>
-          <div class="hint">
-            原样提交：不改大小写、不动横线。<code>gpt-5.6-sol</code> 里的横线是 id
-            的一部分，写成 <code>gpt5.6sol</code> 是另一个（不存在的）模型。
+          <div class="switchline">
+            <span id="demandStateText">已关闭</span>
+            <label class="switch" title="开启或关闭按需打票">
+              <input id="demandEnabled" type="checkbox">
+              <span></span>
+            </label>
           </div>
         </div>
-        <div class="scopecol wide">
-          <div class="scopehead">
-            <span class="sublabel">代理（一行一个）</span>
-            <span class="hint" id="scopeProxyNote"></span>
-            <span class="spacer"></span>
-            <button class="btn ghost" id="btnProxyCheck" type="button">测试连通性</button>
-          </div>
-          <textarea id="scopeProxies" rows="5" spellcheck="false" autocomplete="off"
-                    placeholder="一行一个 URL，空行忽略；顺序就是探测的尝试顺序"
-                    aria-label="探测代理清单，一行一个 URL"></textarea>
-          <div class="row addrow">
-            <input id="scopeProxyAdd" type="text" spellcheck="false" autocomplete="off"
-                   placeholder="贴一条或多条，追加到上面（空格/逗号/换行分隔）"
-                   aria-label="追加代理到清单">
-            <button class="btn ghost" id="btnAddProxy" type="button">追加</button>
-          </div>
-          <div class="hint" id="scopeProxyHint"></div>
-
-          <div class="scopehead" style="margin-top:12px">
-            <span class="sublabel">轮换代理（IP 每次都变）</span>
-            <span class="hint" id="scopeRotNote"></span>
-          </div>
-          <textarea id="scopeRotating" rows="4" spellcheck="false" autocomplete="off"
-                    placeholder="住宅轮换网关放这里，一行一个"
-                    aria-label="轮换代理清单，一行一个 URL"></textarea>
-          <div class="row addrow">
-            <input id="scopeRotAdd" type="text" spellcheck="false" autocomplete="off"
-                   placeholder="贴一条或多条轮换代理，追加到上面"
-                   aria-label="追加轮换代理到清单">
-            <button class="btn ghost" id="btnAddRot" type="button">追加</button>
-          </div>
-          <div class="hint">
-            两个池子的区别不是写法，是<b>重试规则</b>：静态池一条 URL 就是一个 IP，
-            312 之后重拨没有意义，所以每个桶 55 分钟只试一次；轮换池每次连接都是
-            新地址，所以同一条会连试 10 次，失败也只歇 10 分钟。
-            <b>放错池子会让探测白白少掉大部分机会</b> —— 点「测试连通性」会当场核对。
-          </div>
-          <div id="proxyCheck"></div>
+        <div class="request-flow" aria-label="请求处理流程">
+          <div class="flow-step"><span class="num">1</span><b>请求到达</b>识别实际账号和模型</div>
+          <div class="flow-step"><span class="num">2</span><b>检查有效票</b>有票复用，缺票现场获取</div>
+          <div class="flow-step"><span class="num">3</span><b>放行业务</b>成功后转发，失败则返回错误</div>
         </div>
       </div>
+      <div class="demand-grid">
+        <div class="demand-pickers">
+          <div>
+            <div class="step-label">
+              <span class="step-num">1</span>
+              <span>选择需要保护的账号</span>
+              <span class="hint" id="demandAccountNote"></span>
+            </div>
+            <div class="checks" id="demandAccounts"></div>
+          </div>
+          <div>
+            <div class="step-label">
+              <span class="step-num">2</span>
+              <span>选择需要保护的模型</span>
+              <span class="hint" id="demandModelNote"></span>
+            </div>
+            <div class="checks" id="demandModels"></div>
+          </div>
+        </div>
+        <div class="demand-side">
+          <div class="field">
+            <div class="step-label"><span class="step-num">3</span><span>设置最多尝试次数</span></div>
+            <label for="demandAttempts">单次请求最多向上游打票多少次</label>
+            <input id="demandAttempts" type="number" min="1" max="50" step="1" value="10">
+          </div>
+          <div class="field">
+            <div class="step-label"><span class="step-num">4</span><span>设置兜底等待时间</span></div>
+            <label for="demandTimeout">超过这个时间仍未拿到票，请求会失败</label>
+            <input id="demandTimeout" type="number" min="1" max="90" step="1" value="90">
+          </div>
+          <div class="behavior-box">
+            <div class="behavior-title">开启后的实际行为</div>
+            <div class="behavior-line"><i>✓</i><span>有有效票：立即放行，不重复获取</span></div>
+            <div class="behavior-line"><i>✓</i><span>没有业务：保持安静，不主动获取</span></div>
+            <div class="behavior-line warn"><i>!</i><span>WebSocket：当前版本会拒绝，请使用 HTTP/SSE</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="demand-actions">
+        <button class="btn primary" id="btnDemandSave" type="button">保存按需打票设置</button>
+        <span class="hint" id="demandDirty"></span>
+      </div>
+    </div>
+  </section>
 
-      <div id="scopeErrors"></div>
+  <section>
+    <div class="card manual-card">
+      <div>
+        <div class="eyebrow">Manual ticket</div>
+        <h2>立即打票</h2>
+        <p class="lead">选择一个账号和模型。普通打票会遵守账号冷却；“强制打票”可绕过本地冷却，并按上方设置的次数和时间停止。结果会列出 292、312 和错误次数。</p>
+      </div>
+      <div class="manual-form">
+        <div class="field">
+          <label for="manualAccount">账号</label>
+          <select id="manualAccount"></select>
+        </div>
+        <div class="field">
+          <label for="manualModel">模型</label>
+          <select id="manualModel"></select>
+        </div>
+        <button class="btn primary" id="btnManualAcquire" type="button">立即打票</button>
+        <button class="btn" id="btnManualForce" type="button">强制打票（最多 10 次）</button>
+        <div class="manual-result" id="manualGuard"></div>
+        <div class="manual-result" id="manualResult">选择账号和模型后点击按钮。</div>
+      </div>
+    </div>
+  </section>
 
-      <div class="subtle">
-        <div class="row">
-          <button class="btn primary" id="btnScopeSave" type="button">保存探测范围</button>
-          <button class="btn" id="btnScopeReset" type="button">放弃改动</button>
-          <span class="spacer"></span>
+  <details class="advanced network-settings">
+    <summary>网络设置 <span class="hint">需要指定打票出口时再配置</span></summary>
+    <section>
+      <div class="card">
+        <h2>打票使用的代理</h2>
+        <p class="lead">一行一个完整代理 URL，例如 <code>socks5://user:password@host:port</code>。留空表示直接连接。</p>
+        <div class="scopehead">
+          <span class="sublabel">固定出口</span>
+          <span class="hint" id="scopeProxyNote"></span>
+        </div>
+        <textarea id="scopeProxies" rows="5" spellcheck="false" autocomplete="off"
+                  placeholder="一行一个代理 URL"
+                  aria-label="固定出口代理，一行一个 URL"></textarea>
+        <div class="row addrow">
+          <input id="scopeProxyAdd" type="text" spellcheck="false" autocomplete="off"
+                 placeholder="粘贴代理 URL，可一次粘贴多条"
+                 aria-label="追加固定出口代理">
+          <button class="btn ghost" id="btnAddProxy" type="button">追加</button>
+        </div>
+        <div class="hint" id="scopeProxyHint"></div>
+
+        <div id="scopeErrors"></div>
+        <div id="proxyCheck"></div>
+        <div class="subtle row">
+          <button class="btn primary" id="btnScopeSave" type="button">保存代理</button>
+          <button class="btn" id="btnProxyCheck" type="button">测试已保存的代理</button>
+          <button class="btn ghost" id="btnScopeReset" type="button">放弃改动</button>
           <span class="hint" id="scopeDirty"></span>
         </div>
-        <div class="hint">
-          保存范围只是改配置，不会开始采集。要采就用下面<b>「操作」</b>里的
-          <b>开始探测</b> —— 不需要开终端，也不需要任何密钥。
+
+        <div hidden>
+          <span id="scopeAcctNote"></span><span id="scopeModelNote"></span>
+          <div id="scopeAccounts"></div><div id="scopeModels"></div>
+          <input id="scopeModelAdd"><button id="btnAddModel" type="button"></button>
+          <span id="scopeRotNote"></span><textarea id="scopeRotating"></textarea>
+          <input id="scopeRotAdd"><button id="btnAddRot" type="button"></button>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
+  </details>
 
   <section>
-    <h2>桶就绪度</h2>
-    <div class="summary" id="summary"></div>
-    <div class="tablewrap"><table id="matrix"></table></div>
-    <div class="legend">
-      <span><i class="swatch st-ok"></i>就绪（显示剩余时长）</span>
-      <span><i class="swatch st-warn"></i>剩余不足 10 分钟</span>
-      <span><i class="swatch st-miss"></i>缺失或已过期</span>
-      <span><em class="outscope">斜体灰</em> 的行 / 列在探测范围之外：store 里有它的桶，下一轮不会去采</span>
-      <span>点格子可清空该桶</span>
-    </div>
-  </section>
-
-  <section>
-    <h2>决策计数</h2>
-    <div class="counters" id="counters"></div>
-    <div class="since" id="since"></div>
-  </section>
-
-  <section>
-    <h2>探测</h2>
+    <h2>当前票状态</h2>
     <div class="card">
-      <div class="row">
-        <button class="btn primary" id="btnProbeStart" type="button">开始探测</button>
-        <button class="btn danger" id="btnProbeCancel" type="button">停止</button>
-        <span class="spacer"></span>
-        <span class="hint" id="probeProgress"></span>
-      </div>
-      <div id="probeLines"></div>
-      <div class="hint">
-        读每个账号自己的 token 直连上游采集，<b>不经过 CPA、不改 CPA 任何状态</b>
-        （启用位、<code>proxy_url</code> 都不动），所以账号全程照常跑业务、<b>无需停服</b>，
-        多个账号并行。每个桶按代理清单顺序换出口、发一条最小请求。<b class="warntext">会消耗额度。</b>
-        初始采齐后续期循环常驻，卡到期前 5 分钟自动重采；停止探测没有任何账号状态要还原。
+      <div class="summary" id="summary"></div>
+      <div class="tablewrap"><table id="matrix"></table></div>
+      <div class="legend">
+        <span><i class="swatch st-ok"></i>有效（格内显示剩余时间）</span>
+        <span><i class="swatch st-warn"></i>即将过期</span>
+        <span><i class="swatch st-miss"></i>当前无票</span>
+        <span>票严格绑定账号和模型，不能跨账号或跨模型复用</span>
       </div>
     </div>
   </section>
 
   <section>
-    <h2>操作</h2>
+    <div class="row">
+      <h2>最近用票记录</h2>
+      <span class="spacer"></span>
+      <span class="hint">仅保留本次插件运行最近 50 条，重启后清空</span>
+    </div>
     <div class="card">
-      <div class="row">
-        <button class="btn" id="btnDryRun" type="button">翻 dry_run</button>
-        <button class="btn" id="btnRole" type="button">切 role</button>
-        <button class="btn danger" id="btnClearAll" type="button">清空全部桶</button>
-      </div>
-      <div class="subtle">
-        <div class="row">
-          <span class="sublabel">诊断</span>
-          <select id="selftestAuth" aria-label="自检账号"></select>
-          <select id="selftestModel" aria-label="自检模型"></select>
-          <button class="btn ghost" id="btnSelftest" type="button">连通性自检</button>
-        </div>
-        <div class="hint">
-          只验证「请求能否打到上游、上游回了什么状态码」。<b>不会产生桶</b> ——
-          宿主会让插件自己发出的请求跳过本插件的响应钩子，所以自检永远采不到模板，
-          采集用上面「探测」里的「开始探测」。<b class="warntext">会消耗额度。</b>
-          定向到具体账号时<b>不需要</b>停用其它账号；也可以在桶矩阵里 hover 任一格子，
-          用右上角的角标直接自检那对（账号, 模型）。
-        </div>
-      </div>
+      <div class="activity-list" id="ticketActivity"></div>
     </div>
   </section>
+
+  <div hidden>
+    <button id="btnProbeStart" type="button"></button><button id="btnProbeCancel" type="button"></button>
+    <span id="probeProgress"></span><div id="probeLines"></div>
+    <div id="counters"></div><div id="since"></div>
+    <button id="btnDryRun" type="button"></button><button id="btnRole" type="button"></button>
+    <button id="btnClearAll" type="button"></button>
+    <select id="selftestAuth"></select><select id="selftestModel"></select><button id="btnSelftest" type="button"></button>
+  </div>
 </div>
 
 <div id="modal" hidden>
@@ -823,17 +941,21 @@ function renderBadges(d) {
   }
 
   badge("role", d.role || "—", d.role === "probe" ? "role-probe" : "role-business");
+  badge("按需打票", d.on_demand ? "已开启：缺票等待，失败拒绝" : "关闭（原有行为）");
+  if (d.on_demand) {
+    badge("单次打票", (Number(d.on_demand_max_attempts) || 10) + " 次 / " + d.on_demand_timeout_seconds + "s 兜底");
+  }
   // dry_run=true 是安全态（只打日志不改流量），false 才是在动真流量 —— 所以
   // OFF 用告警色，别让人扫一眼以为「绿灯=没事」。
   badge("dry_run", d.dry_run ? "ON（只记录，不改流量）" : "OFF（正在改写真实流量）",
         d.dry_run ? "dry-on" : "dry-off");
-  badge("inject_mode", d.inject_mode || "—");
+  badge("inject_mode", d.on_demand ? "按需模式始终注入有效票" : (d.inject_mode || "—"));
   badge("ttl", (d.ttl_seconds || 0) + "s");
   badge("长度", (d.template_length || 0) + " → 换 " + (d.replace_length || 0));
   badge("store_dir", d.store_dir || "—");
   // 陈述访问性质：这个页面上的每一个动作都不鉴权 —— 看数据、四个操作、保存
   // 探测范围。谁打开页面都该知道这条边界在哪：能摸到这个端口就能改这些。
-  badge("访问", "全程免密钥（本机 127.0.0.1）", "open");
+  badge("访问", "由部署层负责鉴权", "open");
 }
 
 function renderFreshness() {
@@ -861,6 +983,13 @@ function uniqueAuthIds(buckets) {
   return out;
 }
 
+function accountLabel(name) {
+  for (var i = 0; i < scope.acctItems.length; i++) {
+    if (scope.acctItems[i].name === name) { return scope.acctItems[i].text; }
+  }
+  return elideName(name);
+}
+
 // 去重但保留原顺序。模型列用它：models 在 config.yaml 里是人排过的顺序，
 // 排序会让矩阵的列跟配置文件对不上号。
 function uniqKeep(list) {
@@ -875,24 +1004,17 @@ function uniqKeep(list) {
 function renderMatrix(d) {
   var buckets = d.buckets || [];
 
-  // 矩阵就是探测范围：行 = probe_accounts，列 = models。配了范围就按范围画，
-  // 哪怕某个账号一个桶都没有 —— 「点了名却一个都没采到」正是要看的东西。
-  // 范围没配（或 .so 旧到不报 probe_accounts）时退回老行为：按状态报的账号画。
-  var cfgAccts = uniqSorted(strList(d.probe_accounts));
-  var cfgModels = uniqKeep(strList(d.models));
-  var seenAccts = uniqueAuthIds(buckets);
-  var seenModels = uniqSorted(bucketModels(buckets));
-
-  var rows = cfgAccts.length ? cfgAccts : seenAccts;
-  var cols = cfgModels.length ? cfgModels : seenModels;
-  // 范围外的行 / 列：store 里有桶，但不在清单里。照样画出来 —— 这类漂移
-  // （模型改了名、账号被摘掉）只有在这里能被看见。
-  var extraRows = cfgAccts.length
-    ? seenAccts.filter(function (a) { return rows.indexOf(a) < 0; }) : [];
-  var extraCols = cfgModels.length
-    ? seenModels.filter(function (m) { return cols.indexOf(m) < 0; }) : [];
-  var allRows = rows.concat(extraRows);
-  var allCols = cols.concat(extraCols);
+  // 与上面的选择器保持同一口径：只画 CPA 当前未停用的凭据，以及真正受
+  // 保护的 Sol / Astra。旧票仍留在 store，但不再把已停用账号或其他模型
+  // 混进这个业务状态表。
+  var allRows = enabledAccountItems().map(function (it) { return it.name; });
+  if (!usingChoices()) {
+    allRows = uniqSorted(buckets.filter(function (b) { return b && b.enabled !== false; })
+      .map(function (b) { return b.auth_id; }));
+  }
+  var allCols = TICKET_MODELS.slice();
+  var rows = allRows;
+  var cols = allCols;
 
   var byKey = Object.create(null);
   buckets.forEach(function (b) {
@@ -901,8 +1023,6 @@ function renderMatrix(d) {
 
   var ready = 0;                  // 范围内就绪
   var total = rows.length * cols.length;
-  var outsideReady = 0;           // 范围外但 store 里有的
-  var outsideTotal = 0;
 
   var table = $("matrix");
   clear(table);
@@ -911,11 +1031,10 @@ function renderMatrix(d) {
   var hr = el("tr");
   hr.appendChild(el("th", { text: "账号" }));
   allCols.forEach(function (m) {
-    var outside = cols.indexOf(m) < 0;
     hr.appendChild(el("th", {
-      cls: "model" + (outside ? " outscope" : ""),
+      cls: "model",
       text: m,
-      attrs: outside ? { title: m + "\n不在 models 清单里 —— store 里有它的桶，但下一轮不会去采" } : { title: m }
+      attrs: { title: m }
     }));
   });
   thead.appendChild(hr);
@@ -923,92 +1042,42 @@ function renderMatrix(d) {
 
   var tbody = el("tbody");
   allRows.forEach(function (acct) {
-    var rowOutside = rows.indexOf(acct) < 0;
     var tr = el("tr");
     tr.appendChild(el("td", {
-      cls: "acct" + (rowOutside ? " outscope" : ""),
-      text: acct,
-      attrs: {
-        title: rowOutside
-          ? (acct + "\n不在 probe_accounts 里 —— store 里有它的桶，但下一轮不会去采")
-          : acct
-      }
+      cls: "acct",
+      text: accountLabel(acct),
+      attrs: { title: acct }
     }));
     allCols.forEach(function (m) {
-      var outside = rowOutside || cols.indexOf(m) < 0;
       var b = byKey[acct + " " + m];
       var isReady = !!(b && b.ready);
       var left = b ? b.seconds_left : null;
-      // 范围外的桶单独计数，不混进「就绪 x/y」—— 那个分数回答的是「这一轮要采的
-      // 采齐了没有」，把范围外的算进去会让它永远也到不了满分。
-      if (outside) {
-        if (b) { outsideTotal++; }
-        if (isReady) { outsideReady++; }
-      } else if (isReady) {
+      if (isReady) {
         ready++;
       }
       var cls = !isReady ? "st-miss" : (left !== null && left < 600 ? "st-warn" : "st-ok");
-      var td = el("td", { cls: "cell" });
+      var td = el("td", { cls: "cell " + cls });
       var label = isReady ? fmtLeft(left) : "—";
-      var title = (outside ? "【范围外】" : "") + (isReady
-        ? (acct + " / " + m + "\n签发 " + fmtTime(b.issued_at) + "\n过期 " + fmtTime(b.expires_at) + "\n点击清空此桶")
-        : (acct + " / " + m + "\n缺失或已过期"));
-      var btn = el("button", {
-        cls: cls, text: label,
-        attrs: { type: "button", title: title },
-        on: { click: function () { if (isReady) { doClearBucket(acct, m); } } }
-      });
-      if (!isReady) { btn.disabled = true; }
-      td.appendChild(btn);
-      // 角标对缺桶的格子同样可用 —— 主按钮 disabled，它不受影响。
-      td.appendChild(el("button", {
-        cls: "cellprobe", text: "试",
-        attrs: { type: "button", title: "自检 " + acct + " / " + m + "（不落盘，耗额度）" },
-        on: {
-          click: function (ev) {
-            ev.stopPropagation();
-            doSelfTest({ auth: acct, model: m });
-          }
-        }
-      }));
+      var title = (isReady
+        ? (accountLabel(acct) + " / " + m + "\n获取于 " + fmtTime(b.issued_at) + "\n过期于 " + fmtTime(b.expires_at))
+        : (accountLabel(acct) + " / " + m + "\n当前没有有效票"));
+      td.appendChild(el("span", { text: label, attrs: { title: title } }));
       tr.appendChild(td);
     });
     tbody.appendChild(tr);
   });
   table.appendChild(tbody);
 
-  // 目标桶数严格按 len(probe_accounts) × len(models) 算 —— 探测要采的就是这个
-  // 叉积。任何一边没配就给不出这个数，那时宁可写「—」并说清缺什么，也不要拿
-  // 别的数（比如 store 里已有的账号数）顶上去冒充目标。
-  var targetWhy = "";
-  if (!hasField(d, "probe_accounts")) {
-    targetWhy = "当前 .so 的 status 不报 probe_accounts";
-  } else if (!cfgAccts.length) {
-    targetWhy = "probe_accounts 是空的";
-  } else if (!cfgModels.length) {
-    targetWhy = "models 是空的";
-  }
-  var targetCount = targetWhy ? null : (cfgAccts.length * cfgModels.length);
-
   var s = $("summary");
   clear(s);
-  if (allRows.length === 0 && allCols.length === 0) {
-    s.appendChild(el("span", { text: "既没有配探测范围，store 里也还没有任何桶 —— 探测尚未跑过，或 store_dir 为空。" }));
+  if (allRows.length === 0) {
+    s.appendChild(el("span", { text: "CPA 当前没有未停用的 Codex 凭据。" }));
   } else {
-    s.appendChild(el("span", { text: "就绪 " }));
+    s.appendChild(el("span", { text: "当前有效 " }));
     s.appendChild(el("b", { text: ready + "/" + total }));
-    s.appendChild(el("span", { text: "　目标桶数 " }));
-    s.appendChild(el("b", { text: targetCount === null ? "—" : String(targetCount) }));
     s.appendChild(el("span", {
-      text: targetCount === null
-        ? ("（算不出来：" + targetWhy + "；矩阵按状态报的账号和模型画）")
-        : ("（" + cfgAccts.length + " 个账号 × " + cfgModels.length + " 个模型）")
+      text: "。没有票的账号与模型会在业务请求到达时获取（需先开启上方功能）。"
     }));
-    if (outsideTotal) {
-      s.appendChild(el("span", { text: "　另有 " }));
-      s.appendChild(el("b", { text: String(outsideTotal) }));
-      s.appendChild(el("span", { text: " 个范围外的桶（其中 " + outsideReady + " 个仍就绪），不计入上面的分数" }));
-    }
   }
 }
 
@@ -1036,7 +1105,7 @@ function renderSelftestAuths(d) {
 
   clear(sel);
   accounts.forEach(function (a) {
-    sel.appendChild(el("option", { text: a, attrs: { value: a } }));
+    sel.appendChild(el("option", { text: accountLabel(a), attrs: { value: a } }));
   });
   // 「不指定」排在最后且不是默认值：定向才是这个按钮的正常用法，而且不定向
   // 时连「实际用了哪个号」都拿不到，没什么诊断价值。
@@ -1094,12 +1163,35 @@ var scope = {
   dirty: false,             // 人动过表单。动过之后轮询就不再覆盖它
   acctSig: "",
   modelSig: "",
+  demandModelSig: "",
   // ---- /ops/choices 的读取结果。三者互斥地描述「清单能不能用」 ----
   choices: null,            // {accounts:[…], models:[…]}；null = 还没拿到 / 拿不到
   choicesErr: "",           // 非空 = 服务端够不到 CPA 的凭据清单，原话照抄
   choicesMissing: false,    // 404：当前 .so 还没有这条路由
   choicesAt: 0              // 上次【发起】读取的时刻，用来限速
 };
+
+var demand = {
+  enabled: false,
+  maxAttempts: 10,
+  timeout: 90,
+  selected: Object.create(null),
+  models: Object.create(null),
+  dirty: false,
+  sig: "",
+  modelSig: ""
+};
+
+var TICKET_MODELS = ["gpt-5.6-sol", "gpt-6-astra"];
+var FORCE_MAX_ATTEMPTS = 10;
+
+function enabledAccountItems() {
+  return scope.acctItems.filter(function (it) { return !it.disabled && !it.missing; });
+}
+
+function ticketModelItems() {
+  return TICKET_MODELS.map(function (name) { return { name: name, text: name, disabled: false, missing: false }; });
+}
 
 function hasField(obj, k) {
   return !!obj && Object.prototype.hasOwnProperty.call(obj, k);
@@ -1202,7 +1294,8 @@ function choiceList(v) {
       name: name,
       label: (typeof x.label === "string") ? x.label : "",
       disabled: !!x.disabled,
-      selected: !!x.selected
+      selected: !!x.selected,
+      onDemandSelected: !!x.on_demand_selected
     });
   });
   return out;
@@ -1348,6 +1441,162 @@ function syncScope(d) {
   // 时 diff 为空，改一行也就只是改一行。
   scope.proxyText = strList(d.probe_proxies).join("\n");
   scope.rotText = strList(d.probe_proxies_rotating).join("\n");
+}
+
+function syncDemand(d) {
+  if (demand.dirty) { return; }
+  demand.enabled = !!d.on_demand;
+  demand.maxAttempts = Number(d.on_demand_max_attempts) || 10;
+  demand.timeout = Number(d.on_demand_timeout_seconds) || 90;
+  var selected = Object.create(null);
+  strList(d.on_demand_accounts).forEach(function (name) { selected[name] = true; });
+  if (!hasField(d, "on_demand_accounts") && usingChoices()) {
+    scope.choices.accounts.forEach(function (c) {
+      if (c.onDemandSelected) { selected[c.name] = true; }
+    });
+  }
+  demand.selected = selected;
+  var selectedModels = Object.create(null);
+  var savedModels = strList(d.on_demand_models);
+  if (savedModels.length) {
+    savedModels.forEach(function (name) { selectedModels[name] = true; });
+  } else {
+    // 页面只管理真正需要保护的两个模型。旧配置为空（服务端兼容语义是全部）
+    // 时，首次保存会把它收紧成这两个明确值。
+    TICKET_MODELS.forEach(function (name) { selectedModels[name] = true; });
+  }
+  demand.models = selectedModels;
+}
+
+function demandSelectedAccounts() {
+  return selectedNames(enabledAccountItems(), demand.selected);
+}
+
+function demandSelectedModels() {
+  return selectedNames(ticketModelItems(), demand.models);
+}
+
+function demandEdited() {
+  demand.dirty = true;
+  renderDemand(state.data || {});
+}
+
+function renderDemand(d) {
+  syncDemand(d);
+  var enabled = $("demandEnabled");
+  if (document.activeElement !== enabled) { enabled.checked = demand.enabled; }
+  var timeout = $("demandTimeout");
+  if (document.activeElement !== timeout) { timeout.value = String(demand.timeout); }
+  var attempts = $("demandAttempts");
+  if (document.activeElement !== attempts) { attempts.value = String(demand.maxAttempts); }
+  $("demandStateText").textContent = demand.enabled ? "已开启" : "已关闭";
+  var accounts = enabledAccountItems();
+  var models = ticketModelItems();
+  renderChecks("demandAccounts", "demandSig", accounts, demand.selected,
+    !usingChoices(), "没有读到可用的 Codex 账号。",
+    function (name, on) { demand.selected[name] = on; demandEdited(); });
+  renderChecks("demandModels", "demandModelSig", models, demand.models,
+    false, "没有读到可用模型。",
+    function (name, on) { demand.models[name] = on; demandEdited(); });
+  var count = demandSelectedAccounts().length;
+  var modelCount = demandSelectedModels().length;
+  $("demandAccountNote").textContent = count + " / " + accounts.length + " 个未停用账号";
+  $("demandModelNote").textContent = modelCount + " / " + models.length + " 个模型";
+  $("demandDirty").textContent = demand.dirty ? "有未保存改动" : "已保存";
+  $("btnDemandSave").disabled = state.busy || !usingChoices();
+}
+
+function refillSelect(sel, items, allowed, emptyText) {
+  var prev = sel.value;
+  clear(sel);
+  items.forEach(function (it) {
+    if (allowed && !allowed[it.name]) { return; }
+    var opt = el("option", { text: it.text, attrs: { value: it.name } });
+    sel.appendChild(opt);
+  });
+  if (!sel.options.length) {
+    sel.appendChild(el("option", { text: emptyText, attrs: { value: "" } }));
+    sel.disabled = true;
+    return;
+  }
+  sel.disabled = false;
+  for (var i = 0; i < sel.options.length; i++) {
+    if (sel.options[i].value === prev) { sel.value = prev; return; }
+  }
+}
+
+function renderManualControls(d) {
+  var allowed = null;
+  if (d.on_demand) {
+    allowed = Object.create(null);
+    strList(d.on_demand_accounts).forEach(function (a) { allowed[a] = true; });
+  }
+  refillSelect($("manualAccount"), enabledAccountItems(), allowed,
+    d.on_demand ? "没有已启用按需打票的账号" : "没有可用账号");
+  refillSelect($("manualModel"), ticketModelItems(), null, "没有可用模型");
+  var usable = !!$("manualAccount").value && !!$("manualModel").value;
+  $("btnManualAcquire").disabled = state.busy || !usable;
+  $("btnManualForce").disabled = state.busy || !usable;
+  if (!state.busy) {
+    $("btnManualForce").textContent = "强制打票（最多 " + (Number(d.on_demand_max_attempts) || FORCE_MAX_ATTEMPTS) + " 次）";
+  }
+  var guard = $("manualGuard");
+  var selected = $("manualAccount").value;
+  var blocks = Array.isArray(d.account_blocks) ? d.account_blocks : [];
+  var block = null;
+  for (var i = 0; i < blocks.length; i++) {
+    if (blocks[i].auth_id === selected) { block = blocks[i]; break; }
+  }
+  guard.className = "manual-result";
+  guard.textContent = "";
+  if (block && block.status === "reauthorization_required") {
+    guard.className = "manual-result err";
+    guard.textContent = "此账号最近返回 HTTP 401，需要重新授权。授权完成后可点“强制打票”立即验证。";
+  } else if (block && block.status === "cooldown") {
+    guard.className = "manual-result warn";
+    guard.textContent = "此账号正在冷却（" + (block.reason || "上游暂时拒绝") +
+      "），剩余 " + fmtLeft(block.seconds_left || 0) + "。普通打票会直接拒绝，可点“强制打票”最多尝试 " + (Number(d.on_demand_max_attempts) || FORCE_MAX_ATTEMPTS) + " 次。";
+  }
+}
+
+function activityTitle(a) {
+  if (a.kind === "manual" && a.result === "acquired") { return "主动打票成功"; }
+  if (a.kind === "manual" && a.result === "reused") { return "已有有效票"; }
+  if (a.kind === "manual") { return "主动打票失败"; }
+  if (a.kind === "passive") { return "被动保存成功"; }
+  if (a.result === "acquired") { return "业务缺票后取得"; }
+  if (a.result === "reused") { return "业务沿用现有票"; }
+  return "业务等待打票失败";
+}
+
+function renderTicketActivity(d) {
+  var box = $("ticketActivity");
+  clear(box);
+  var items = Array.isArray(d.ticket_activity) ? d.ticket_activity : [];
+  if (!items.length) {
+    box.appendChild(el("div", { cls: "activity-empty", text: "还没有记录。主动打票或业务请求用票后会显示在这里。" }));
+    return;
+  }
+  items.forEach(function (a) {
+    var good = a.result !== "failed";
+    var when = a.at ? new Date(a.at) : null;
+    var timeText = when && !isNaN(when.getTime()) ? when.toLocaleTimeString() : "—";
+    var expiry = a.seconds_left > 0
+      ? ("剩余 " + fmtLeft(a.seconds_left) + "，到期 " + fmtTime(a.expires_at))
+      : (a.expires_at ? ("已过期 " + fmtTime(a.expires_at)) : "未取得有效票");
+    box.appendChild(el("div", { cls: "activity-row" }, [
+      el("div", { cls: "activity-when", text: timeText }),
+      el("div", { cls: "activity-account", text: (a.account || "—") + " / " + (a.model || "—") }),
+      el("div", { cls: "activity-event" }, [
+        el("span", { cls: "activity-pill " + (good ? "ok" : "err"), text: good ? "成功" : "失败" }),
+        el("span", { text: activityTitle(a) })
+      ]),
+      el("div", { cls: "activity-meta" }, [
+        el("div", { text: expiry }),
+        el("div", { cls: "activity-message", text: a.message || "" })
+      ])
+    ]));
+  });
 }
 
 // 签名覆盖每一个会改变这块 DOM 的东西：清单、显示名、两个状态标、勾选、整体
@@ -1648,11 +1897,7 @@ function renderScopeMeta(d) {
   dirty.className = "hint" + (scope.dirty ? " warn" : "");
   // 账号那一侧读不到的时候，不要写「0 账号」—— 那看着像是人自己一个都没选。
   dirty.appendChild(el("span", {
-    text: (scopeAccountsEditable()
-            ? ("表单：" + selA.length + " 账号 × " + selM.length + " 模型 = " +
-               (selA.length * selM.length) + " 个目标桶")
-            : ("表单：模型 " + selM.length + " 个；账号这一侧读不到，算不出目标桶数")) +
-          (scope.dirty ? " · 有未保存的改动" : " · 与当前配置一致")
+    text: scope.dirty ? "代理有未保存的改动" : "代理设置已保存"
   }));
 
   $("btnScopeReset").disabled = !scope.dirty;
@@ -1900,6 +2145,16 @@ function renderProbeRun(d) {
   var note = $("probeProgress");
   clear(note);
 
+  if (d.on_demand) {
+    start.disabled = true;
+    cancel.disabled = !(run && run.running);
+    start.textContent = "按需模式：无需主动探测";
+    note.className = "hint";
+    note.appendChild(el("span", { text: "仅选中的账号收到 HTTP/SSE 业务请求时获取票；同账号、同模型的有效票会复用，无业务时不会续票。开关与账号在页面顶部设置，下面的主动探测范围不会改变按需账号。" }));
+    clear($("probeLines"));
+    return;
+  }
+
   if (!run) {
     start.disabled = true;
     cancel.disabled = true;
@@ -1952,7 +2207,10 @@ function render() {
   var d = state.data;
   renderBadges(d);
   renderScope(d);
+  renderDemand(d);
+  renderManualControls(d);
   renderMatrix(d);
+  renderTicketActivity(d);
   renderCounters(d);
   renderProbeRun(d);
   renderSelftestAuths(d);
@@ -2078,6 +2336,139 @@ function doToggleRole() {
         notify("info", "role 已切到 " + next +
           "。若接下来发现钩子没被调用（probe 采不到 / business 不替换），重启一次 cli-proxy-api。");
         return refresh();
+      });
+    }).catch(actionError);
+  });
+}
+
+// 普通页面只暴露网络设置。它只提交代理两栏，不把隐藏的账号/模型范围带回去，
+// 也不要求用户理解旧版的目标桶确认流程。
+function doSaveProxies() {
+  var d = state.data;
+  if (!d) { notify("err", "还没拿到当前配置，请稍后再试。"); return; }
+  var fixed = parseLines(scope.proxyText);
+  var masked = fixed.filter(looksMasked);
+  if (masked.length) {
+    notify("err", "代理里有 " + masked.length + " 行包含 ***。请换成完整代理 URL 后再保存。");
+    return;
+  }
+  var baseFixed = strList(d.probe_proxies);
+  var fields = [], params = {};
+  if (!sameList(baseFixed, fixed)) { fields.push("proxies"); params.proxy = fixed; }
+  if (!fields.length) { notify("info", "代理设置没有变化。"); return; }
+  params.fields = fields.join(",");
+  return withBusy(function () {
+    return resAction("/ops/scope", params).then(function (r) {
+      scope.dirty = false;
+      notify("ok", "代理已保存：固定出口 " + (r.probe_proxy_count || 0) + " 条。");
+      return refresh();
+    });
+  }).catch(actionError);
+}
+
+function doManualAcquire(force) {
+  var account = $("manualAccount").value;
+  var model = $("manualModel").value;
+  var result = $("manualResult");
+  if (!account || !model) {
+    result.className = "manual-result err";
+    result.textContent = "请先选择账号和模型。";
+    return;
+  }
+  var button = force ? $("btnManualForce") : $("btnManualAcquire");
+  var other = force ? $("btnManualAcquire") : $("btnManualForce");
+  var maxAttempts = (state.data && Number(state.data.on_demand_max_attempts)) || FORCE_MAX_ATTEMPTS;
+  var originalText = force ? "强制打票（最多 " + maxAttempts + " 次）" : "立即打票";
+  button.disabled = true;
+  other.disabled = true;
+  button.textContent = force ? "正在强制打票…" : "正在打票…";
+  result.className = "manual-result";
+  var timeout = (state.data && state.data.on_demand_timeout_seconds) || 90;
+  var started = Date.now();
+  var ticker = null;
+  if (force) {
+    result.textContent = "正在强制打票：最多请求上游 " + maxAttempts + " 次，" + timeout + " 秒兜底；拿到 292 或遇到账号级错误会提前停止。";
+  } else {
+    result.textContent = "正在检查现有票；缺票时会等待上游返回 292，最长 " + timeout + " 秒。";
+    ticker = setInterval(function () {
+      var elapsed = Math.floor((Date.now() - started) / 1000);
+      result.textContent = "正在等待；已用 " + elapsed + " 秒，最长 " + timeout + " 秒。";
+    }, 1000);
+  }
+  withBusy(function () {
+    return resAction("/ops/ticket", { account: account, model: model, force: force ? "1" : "0" }).then(function (r) {
+      var reused = r.result === "reused";
+      result.className = "manual-result ok";
+      result.textContent = (reused
+        ? "已有有效票，本次未请求上游。"
+        : ("打票成功，292 票已保存；" + (r.outcome_summary || ("尝试 " + (Number(r.attempts) || 0) + " 次")) + "。")) +
+        (r.seconds_left > 0 ? (" 剩余 " + fmtLeft(r.seconds_left) + "，到期 " + fmtTime(r.expires_at) + "。") : "");
+      notify("ok", accountLabel(account) + " / " + model + "：" + result.textContent);
+      return refresh();
+    });
+  }).catch(function (err) {
+    result.className = "manual-result err";
+    result.textContent = (err && err.message) ? err.message : String(err);
+    notify("err", accountLabel(account) + " / " + model + "：" + result.textContent);
+    return refresh();
+  }).then(function () {
+    if (ticker) { clearInterval(ticker); }
+    button.textContent = originalText;
+    renderManualControls(state.data || {});
+  });
+}
+
+function doSaveDemand() {
+  var d = state.data;
+  if (!d) { notify("err", "还没拿到状态，等一次刷新再保存。"); return; }
+  var accounts = demandSelectedAccounts();
+  var models = demandSelectedModels();
+  var maxAttempts = Number($("demandAttempts").value);
+  var timeout = Number($("demandTimeout").value);
+  var enabled = $("demandEnabled").checked;
+  if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 50) {
+    notify("err", "最多尝试次数必须是 1–50 的整数。");
+    return;
+  }
+  if (!Number.isInteger(timeout) || timeout < 1 || timeout > 90) {
+    notify("err", "兜底等待时间必须是 1–90 秒的整数。");
+    return;
+  }
+  if (enabled && !accounts.length) {
+    notify("err", "开启按需打票前，至少选择一个账号。");
+    return;
+  }
+  if (enabled && !models.length) {
+    notify("err", "开启按需打票前，至少选择一个模型。");
+    return;
+  }
+  var lines = [
+    { text: "状态：" + (d.on_demand ? "已开启" : "已关闭") + " → " + (enabled ? "开启" : "关闭") },
+    { text: "账号：" + accounts.length + " 个；模型：" + models.length + " 个；最多尝试 " + maxAttempts + " 次，" + timeout + " 秒兜底。" }
+  ];
+  if (enabled) {
+    lines.push({ text: "这些账号的 HTTP/SSE 业务请求缺票时会等待；打票失败或超时会拒绝该次业务请求。", em: true });
+    lines.push({ text: "空闲账号不会主动打票。后台主动探测会停止。WebSocket 请求会拒绝。" });
+  } else {
+    lines.push({ text: "关闭后恢复旧模式行为；保存的账号名单会保留，方便下次开启。" });
+  }
+  confirmDialog({
+    title: enabled ? "开启按需打票？" : "保存并关闭按需打票？",
+    danger: enabled,
+    confirmText: enabled ? "开启" : "保存并关闭",
+    lines: lines
+  }).then(function (go) {
+    if (!go) { return; }
+    return withBusy(function () {
+      return resAction("/ops/on-demand", {
+        value: enabled ? "on" : "off", account: accounts, model: models,
+        attempts: String(maxAttempts), timeout: String(timeout)
+      }).then(function (r) {
+        demand.dirty = false;
+        notify("ok", "按需打票已" + (r.on_demand ? "开启" : "关闭") +
+          "，账号 " + strList(r.on_demand_accounts).length + " 个，模型 " + strList(r.on_demand_models).length + " 个，最多尝试 " + r.on_demand_max_attempts + " 次，" + r.on_demand_timeout_seconds + " 秒兜底。" +
+          (r.warning ? "\n警告：" + r.warning : ""));
+        return fetchChoices(true).then(refresh);
       });
     }).catch(actionError);
   });
@@ -2334,11 +2725,28 @@ $("btnProbeStart").addEventListener("click", doProbeStart);
 $("btnProbeCancel").addEventListener("click", doProbeCancel);
 $("btnDryRun").addEventListener("click", doToggleDryRun);
 $("btnRole").addEventListener("click", doToggleRole);
+$("btnDemandSave").addEventListener("click", doSaveDemand);
+$("btnManualAcquire").addEventListener("click", function () { doManualAcquire(false); });
+$("btnManualForce").addEventListener("click", function () { doManualAcquire(true); });
+$("manualAccount").addEventListener("change", function () { renderManualControls(state.data || {}); });
+$("manualModel").addEventListener("change", function () { renderManualControls(state.data || {}); });
+$("demandEnabled").addEventListener("change", function () {
+  demand.enabled = $("demandEnabled").checked;
+  demandEdited();
+});
+$("demandTimeout").addEventListener("input", function () {
+  demand.timeout = Number($("demandTimeout").value);
+  demandEdited();
+});
+$("demandAttempts").addEventListener("input", function () {
+  demand.maxAttempts = Number($("demandAttempts").value);
+  demandEdited();
+});
 $("btnClearAll").addEventListener("click", doClearAll);
 // 必须包一层：直接传 doSelfTest 会把 MouseEvent 当成 opts。
 $("btnSelftest").addEventListener("click", function () { doSelfTest(); });
 
-$("btnScopeSave").addEventListener("click", doSaveScope);
+$("btnScopeSave").addEventListener("click", doSaveProxies);
 $("btnScopeReset").addEventListener("click", doResetScope);
 $("btnAddModel").addEventListener("click", addModelFromInput);
 $("scopeModelAdd").addEventListener("keydown", function (e) {

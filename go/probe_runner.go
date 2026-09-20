@@ -48,11 +48,13 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"reflect"
 	"regexp"
 	"sort"
 	"strings"
@@ -171,6 +173,11 @@ var (
 	probeRotatingAttempts = 10
 	probeRotatingCooldown = 10 * time.Minute
 
+	// One operator click may spend at most ten upstream requests. A successful
+	// 292 or an account-level response stops the walk sooner.
+	defaultTicketAcquireMaxAttempts int32 = 10
+	ticketAcquireMaxWait                  = 90 * time.Second
+
 	// probeAccountBackoff is how long a credential is left alone after the
 	// upstream signals an account-level refusal (429, or a rejected token).
 	// Distinct from probeExitCooldown because the signal is distinct: a 312 says
@@ -227,6 +234,9 @@ func probeRunStart() error {
 	state.mu.Lock()
 	cfg := state.config
 	state.mu.Unlock()
+	if cfg.OnDemand {
+		return fmt.Errorf("on_demand is enabled: tickets are acquired only by business requests; background probes are disabled")
+	}
 
 	accounts := append([]string(nil), cfg.ProbeAccounts...)
 	models := append([]string(nil), cfg.Models...)
@@ -503,6 +513,12 @@ func probeFireBatch(ctx context.Context, cfg pluginConfig, pool *probeClientPool
 // exit is still inside probeExitCooldown returns false without a word, which is
 // what keeps the renewal loop from narrating the same skip once a minute.
 func probeHarvestBucket(ctx context.Context, cfg pluginConfig, pool *probeClientPool, cred probeCredential, model string, proxies, rotating []string, accountIdx int) bool {
+	state.mu.Lock()
+	blocked := state.config.OnDemand && !cfg.OnDemand
+	state.mu.Unlock()
+	if blocked || ctx.Err() != nil {
+		return false
+	}
 	key := bucketKey(cred.name, model)
 	if !probeClaim(key) {
 		// Another fire (the other loop, or an overtaking renewal tick) is already
@@ -513,7 +529,8 @@ func probeHarvestBucket(ctx context.Context, cfg pluginConfig, pool *probeClient
 	defer probeRelease(key)
 
 	short := maskAuthLabel(cred.name)
-	if !probeAccountReady(cred.name, time.Now()) {
+	forced := probeForceAttempt(ctx)
+	if !probeAccountReady(cred.name, time.Now()) && !forced {
 		// The upstream asked for this credential to be left alone. Silent: the
 		// renewal loop would otherwise say so once a minute per bucket.
 		return false
@@ -539,13 +556,17 @@ func probeHarvestBucket(ctx context.Context, cfg pluginConfig, pool *probeClient
 		if ctx.Err() != nil {
 			return fired
 		}
+		if probeAttemptLimitReached(ctx) {
+			probeRunLog("%s %s: ticket acquisition reached its %d-attempt limit", short, model, probeAttemptLimit(ctx))
+			return fired
+		}
 		// Space the exits apart. Only after a real attempt -- skipping a cooling
 		// exit costs nothing and should not be paced.
 		if fired && !probeSleep(ctx, probeExitPause) {
 			return fired
 		}
 		now := time.Now()
-		if !probeCooldownReady(exit, cred.name, model, now) {
+		if !forced && !probeCooldownReady(exit, cred.name, model, now) {
 			// Spent within the window. Silent on purpose: saying so would put one
 			// line per bucket per tick into a forty-line transcript.
 			continue
@@ -565,18 +586,25 @@ func probeHarvestBucket(ctx context.Context, cfg pluginConfig, pool *probeClient
 
 		status, value, errFire := probeFireUpstream(ctx, client, cred, model)
 		if errFire != nil {
+			if errors.Is(errFire, errTicketAttemptLimit) {
+				return fired
+			}
+			probeRecordTransportFailure(ctx)
 			// A transport failure means this exit did not carry the request at all;
 			// the next one might.
 			probeRunLog("%s %s: exit %s failed at transport, trying next: %s", short, model, probeShowProxy(exit), probeRedact(errFire.Error()))
 			continue
 		}
+		probeRecordAttemptResponse(ctx, status, value)
 		switch probeConsume(cfg, cred.name, short, model, status, value, exit) {
 		case probeOutcomeStored:
 			return true
 		case probeOutcomeAccountLimited:
 			// Account-level refusal: every remaining exit carries the same
-			// credential, so walking on would only deepen it.
-			probeAccountSetBackoff(cred.name, time.Now())
+			// credential, so walking on would only deepen it. probeConsume has
+			// already recorded either the cooldown or reauthorization state.
+			return fired
+		case probeOutcomeReauthorizationRequired:
 			return fired
 		}
 		// Not stored -- a 312. That is THIS EXIT's IP being
@@ -611,13 +639,17 @@ func probeHarvestBucket(ctx context.Context, cfg pluginConfig, pool *probeClient
 // still spent these attempts, and must not come back and spend them again.
 func probeHarvestRotating(ctx context.Context, cfg pluginConfig, pool *probeClientPool, cred probeCredential, short, model string, rotating []string, accountIdx int) (stored, fired bool) {
 	now := time.Now()
-	if !probeCooldownReady(probeRotatingExit, cred.name, model, now) {
+	if !probeForceAttempt(ctx) && !probeCooldownReady(probeRotatingExit, cred.name, model, now) {
 		return false, false
 	}
 	probeCooldownSet(probeRotatingExit, cred.name, model, now.Add(probeRotatingCooldown))
 
 	for attempt := 0; attempt < probeRotatingAttempts; attempt++ {
 		if ctx.Err() != nil {
+			return false, fired
+		}
+		if probeAttemptLimitReached(ctx) {
+			probeRunLog("%s %s: ticket acquisition reached its %d-attempt limit", short, model, probeAttemptLimit(ctx))
 			return false, fired
 		}
 		if fired && !probeSleep(ctx, probeExitPause) {
@@ -633,9 +665,14 @@ func probeHarvestRotating(ctx context.Context, cfg pluginConfig, pool *probeClie
 
 		status, value, errFire := probeFireUpstream(ctx, client, cred, model)
 		if errFire != nil {
+			if errors.Is(errFire, errTicketAttemptLimit) {
+				return false, fired
+			}
+			probeRecordTransportFailure(ctx)
 			probeRunLog("%s %s: rotating exit %s failed at transport, trying next: %s", short, model, probeShowProxy(exit), probeRedact(errFire.Error()))
 			continue
 		}
+		probeRecordAttemptResponse(ctx, status, value)
 		switch probeConsume(cfg, cred.name, short, model, status, value, exit) {
 		case probeOutcomeStored:
 			probeCooldownSet(probeRotatingExit, cred.name, model, time.Now().Add(probeExitCooldown))
@@ -644,7 +681,8 @@ func probeHarvestRotating(ctx context.Context, cfg pluginConfig, pool *probeClie
 			// A 429 is the credential being told to slow down. No address the
 			// gateway can hand out changes that, so the remaining attempts would
 			// only deepen it.
-			probeAccountSetBackoff(cred.name, time.Now())
+			return false, fired
+		case probeOutcomeReauthorizationRequired:
 			return false, fired
 		}
 		// A 312: this address is throttled for this bucket. Unlike a static exit,
@@ -672,11 +710,17 @@ func probeConsume(cfg pluginConfig, name, short, model string, status int, value
 		// rests; continuing is what escalated a 312 into a wall of 429s.
 		probeRunLog("%s %s: http=429 — upstream is rate limiting this credential, not this exit; stopping the walk and resting the account for %s",
 			short, model, probeAccountBackoff)
+		probeAccountSetBackoff(name, time.Now(), "HTTP 429：上游限制该账号")
 		return probeOutcomeAccountLimited
-	case http.StatusUnauthorized, http.StatusForbidden:
-		// A rejected token is equally not the exit's fault.
-		probeRunLog("%s %s: http=%d — the credential was refused, no exit can change that; resting the account for %s",
-			short, model, status, probeAccountBackoff)
+	case http.StatusUnauthorized:
+		probeRunLog("%s %s: http=401 — this credential needs reauthorization; stopping because no exit can repair an expired or revoked token",
+			short, model)
+		probeAccountRequireReauthorization(name, time.Now())
+		return probeOutcomeReauthorizationRequired
+	case http.StatusForbidden:
+		probeRunLog("%s %s: http=403 — the credential was refused; resting the account for %s (manual force remains available)",
+			short, model, probeAccountBackoff)
+		probeAccountSetBackoff(name, time.Now(), "HTTP 403：上游暂时拒绝该账号")
 		return probeOutcomeAccountLimited
 	}
 	if status != http.StatusOK {
@@ -707,7 +751,18 @@ func probeConsume(cfg pluginConfig, name, short, model string, status int, value
 // under anything else would silently break every substitution. Attribution is
 // "observed": we held the token, so the account is certain, not inferred.
 func probeStore(cfg pluginConfig, name, model, value string) error {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.config.OnDemand && !cfg.OnDemand {
+		return fmt.Errorf("background harvesting disabled")
+	}
+	if cfg.OnDemand && (!reflect.DeepEqual(cfg, state.config) || !demandSelected(cfg, name)) {
+		return fmt.Errorf("on-demand configuration changed")
+	}
 	now := time.Now()
+	if cfg.OnDemand && !demandTicketValid(cfg, value, now) {
+		return fmt.Errorf("ticket is not a valid unexpired 292")
+	}
 	issued, ok := fernetIssuedAt(value)
 	if !ok {
 		issued = now
@@ -724,14 +779,15 @@ func probeStore(cfg pluginConfig, name, model, value string) error {
 	if errWrite := writeStoreRecord(cfg.StoreDir, record, cfg.TemplateLength); errWrite != nil {
 		return errWrite
 	}
+	// A successful authenticated upstream response proves both a previous 401
+	// marker and a 403/429 cooldown are stale.
+	probeAccountClearBlock(name)
 	if errIndex := writeStoreIndex(cfg.StoreDir, now, cfg.ttl(), cfg.TemplateLength); errIndex != nil {
 		// The bucket file is on disk and is what the business role actually reads;
 		// a stale index is a monitoring gap, not a lost harvest. Log and keep it.
 		log.Printf("%sprobe index write failed: %v", logPrefix, errIndex)
 	}
-	state.mu.Lock()
 	state.buckets[bucketKey(name, model)] = templateEntry{value: value, issuedAt: issued}
-	state.mu.Unlock()
 	return nil
 }
 
@@ -774,6 +830,12 @@ func probeDownloadCreds(ctx context.Context, client *probeClient, accounts []str
 // the in-scope buckets that are missing or under probeRenewThreshold of life,
 // and re-harvests them. It returns on cancel.
 func probeRenewLoop(ctx context.Context, pool *probeClientPool) {
+	state.mu.Lock()
+	onDemand := state.config.OnDemand
+	state.mu.Unlock()
+	if onDemand {
+		return
+	}
 	ticker := time.NewTicker(probeRenewInterval)
 	defer ticker.Stop()
 	for {
@@ -789,6 +851,9 @@ func probeRenewLoop(ctx context.Context, pool *probeClientPool) {
 		state.mu.Lock()
 		cfg := state.config
 		state.mu.Unlock()
+		if cfg.OnDemand {
+			return
+		}
 		accounts := append([]string(nil), cfg.ProbeAccounts...)
 		models := append([]string(nil), cfg.Models...)
 		proxies := append([]string(nil), cfg.ProbeProxies...)
@@ -997,26 +1062,236 @@ func probeCooldownSet(exit, account, model string, until time.Time) {
 	probeCooldown.until[probeCooldownKey(exit, account, model)] = until
 }
 
-// probeAccountRest holds credentials the upstream has told us to leave alone.
-// Keyed by account only: a 429 is about the credential, not about the exit it
-// happened to arrive through, so every bucket and every exit of that account
-// waits together.
+// probeAccountRest holds temporary account-wide cooldowns from 403/429. A 401
+// is deliberately kept elsewhere: it normally means the credential needs
+// reauthorization and waiting ten minutes does not repair it.
 var probeAccountRest = struct {
-	mu    sync.Mutex
-	until map[string]time.Time
-}{until: make(map[string]time.Time)}
+	mu     sync.Mutex
+	until  map[string]time.Time
+	reason map[string]string
+}{until: make(map[string]time.Time), reason: make(map[string]string)}
 
-func probeAccountReady(account string, now time.Time) bool {
+var probeAccountAuthorization = struct {
+	mu       sync.Mutex
+	required map[string]time.Time
+}{required: make(map[string]time.Time)}
+
+// A forced attempt is deliberately scoped to one operator-triggered call. It
+// bypasses the plugin's local account block, but it does not erase that block:
+// only a newly stored 292 proves that the account is usable again.
+type probeForceContextKey struct{}
+
+type probeAttemptCounterContextKey struct{}
+
+var errTicketAttemptLimit = errors.New("ticket acquisition attempt limit reached")
+
+type probeAttemptBudget struct {
+	count             atomic.Int32
+	max               int32
+	returned292       atomic.Int32
+	returned312       atomic.Int32
+	unauthorized401   atomic.Int32
+	forbidden403      atomic.Int32
+	rateLimited429    atomic.Int32
+	otherHTTP         atomic.Int32
+	missingTurnState  atomic.Int32
+	transportFailures atomic.Int32
+}
+
+type probeAttemptStats struct {
+	Attempts          int32
+	Returned292       int32
+	Returned312       int32
+	Unauthorized401   int32
+	Forbidden403      int32
+	RateLimited429    int32
+	OtherHTTP         int32
+	MissingTurnState  int32
+	TransportFailures int32
+}
+
+func withProbeForceAttempt(ctx context.Context) context.Context {
+	return context.WithValue(ctx, probeForceContextKey{}, true)
+}
+
+func probeForceAttempt(ctx context.Context) bool {
+	forced, _ := ctx.Value(probeForceContextKey{}).(bool)
+	return forced
+}
+
+func withProbeAttemptCounter(ctx context.Context, max int32) (context.Context, *probeAttemptBudget) {
+	budget := &probeAttemptBudget{max: max}
+	return context.WithValue(ctx, probeAttemptCounterContextKey{}, budget), budget
+}
+
+func (b *probeAttemptBudget) stats() probeAttemptStats {
+	if b == nil {
+		return probeAttemptStats{}
+	}
+	return probeAttemptStats{
+		Attempts: b.count.Load(), Returned292: b.returned292.Load(), Returned312: b.returned312.Load(),
+		Unauthorized401: b.unauthorized401.Load(), Forbidden403: b.forbidden403.Load(),
+		RateLimited429: b.rateLimited429.Load(), OtherHTTP: b.otherHTTP.Load(),
+		MissingTurnState: b.missingTurnState.Load(), TransportFailures: b.transportFailures.Load(),
+	}
+}
+
+func probeAttemptBudgetFrom(ctx context.Context) *probeAttemptBudget {
+	budget, _ := ctx.Value(probeAttemptCounterContextKey{}).(*probeAttemptBudget)
+	return budget
+}
+
+func probeAttemptLimitReached(ctx context.Context) bool {
+	budget := probeAttemptBudgetFrom(ctx)
+	return budget != nil && budget.max > 0 && budget.count.Load() >= budget.max
+}
+
+func probeAttemptLimit(ctx context.Context) int32 {
+	if budget := probeAttemptBudgetFrom(ctx); budget != nil {
+		return budget.max
+	}
+	return 0
+}
+
+func probeCountAttempt(ctx context.Context) bool {
+	budget := probeAttemptBudgetFrom(ctx)
+	if budget == nil {
+		return true
+	}
+	for {
+		current := budget.count.Load()
+		if budget.max > 0 && current >= budget.max {
+			return false
+		}
+		if budget.count.CompareAndSwap(current, current+1) {
+			return true
+		}
+	}
+}
+
+func probeRecordTransportFailure(ctx context.Context) {
+	if budget := probeAttemptBudgetFrom(ctx); budget != nil {
+		budget.transportFailures.Add(1)
+	}
+}
+
+func probeRecordAttemptResponse(ctx context.Context, status int, value string) {
+	budget := probeAttemptBudgetFrom(ctx)
+	if budget == nil {
+		return
+	}
+	switch status {
+	case http.StatusUnauthorized:
+		budget.unauthorized401.Add(1)
+	case http.StatusForbidden:
+		budget.forbidden403.Add(1)
+	case http.StatusTooManyRequests:
+		budget.rateLimited429.Add(1)
+	case http.StatusOK:
+		switch len(value) {
+		case 292:
+			budget.returned292.Add(1)
+		case 312:
+			budget.returned312.Add(1)
+		case 0:
+			budget.missingTurnState.Add(1)
+		default:
+			budget.otherHTTP.Add(1)
+		}
+	default:
+		budget.otherHTTP.Add(1)
+	}
+}
+
+type probeAccountBlockStatus struct {
+	AuthID      string `json:"auth_id"`
+	Status      string `json:"status"` // cooldown or reauthorization_required
+	Reason      string `json:"reason"`
+	Since       string `json:"since,omitempty"`
+	Until       string `json:"until,omitempty"`
+	SecondsLeft int64  `json:"seconds_left,omitempty"`
+}
+
+func probeAccountBlock(account string, now time.Time) (probeAccountBlockStatus, bool) {
+	probeAccountAuthorization.mu.Lock()
+	reauthAt, reauth := probeAccountAuthorization.required[account]
+	probeAccountAuthorization.mu.Unlock()
+	if reauth {
+		return probeAccountBlockStatus{
+			AuthID: account, Status: "reauthorization_required",
+			Reason: "上游返回 HTTP 401，需要重新授权账号",
+			Since:  reauthAt.UTC().Format(time.RFC3339),
+		}, true
+	}
+
 	probeAccountRest.mu.Lock()
 	defer probeAccountRest.mu.Unlock()
 	until, seen := probeAccountRest.until[account]
-	return !seen || now.After(until)
+	if !seen || !now.Before(until) {
+		if seen {
+			delete(probeAccountRest.until, account)
+			delete(probeAccountRest.reason, account)
+		}
+		return probeAccountBlockStatus{}, false
+	}
+	left := int64(until.Sub(now) / time.Second)
+	if left < 1 {
+		left = 1
+	}
+	return probeAccountBlockStatus{
+		AuthID: account, Status: "cooldown", Reason: probeAccountRest.reason[account],
+		Until: until.UTC().Format(time.RFC3339), SecondsLeft: left,
+	}, true
 }
 
-func probeAccountSetBackoff(account string, now time.Time) {
+func probeAccountBlockSnapshot(now time.Time) []probeAccountBlockStatus {
+	seen := make(map[string]bool)
+	probeAccountAuthorization.mu.Lock()
+	for account := range probeAccountAuthorization.required {
+		seen[account] = true
+	}
+	probeAccountAuthorization.mu.Unlock()
+	probeAccountRest.mu.Lock()
+	for account := range probeAccountRest.until {
+		seen[account] = true
+	}
+	probeAccountRest.mu.Unlock()
+	out := make([]probeAccountBlockStatus, 0, len(seen))
+	for account := range seen {
+		if status, blocked := probeAccountBlock(account, now); blocked {
+			out = append(out, status)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].AuthID < out[j].AuthID })
+	return out
+}
+
+func probeAccountReady(account string, now time.Time) bool {
+	_, blocked := probeAccountBlock(account, now)
+	return !blocked
+}
+
+func probeAccountSetBackoff(account string, now time.Time, reason string) {
 	probeAccountRest.mu.Lock()
 	defer probeAccountRest.mu.Unlock()
 	probeAccountRest.until[account] = now.Add(probeAccountBackoff)
+	probeAccountRest.reason[account] = reason
+}
+
+func probeAccountRequireReauthorization(account string, now time.Time) {
+	probeAccountAuthorization.mu.Lock()
+	probeAccountAuthorization.required[account] = now
+	probeAccountAuthorization.mu.Unlock()
+}
+
+func probeAccountClearBlock(account string) {
+	probeAccountRest.mu.Lock()
+	delete(probeAccountRest.until, account)
+	delete(probeAccountRest.reason, account)
+	probeAccountRest.mu.Unlock()
+	probeAccountAuthorization.mu.Lock()
+	delete(probeAccountAuthorization.required, account)
+	probeAccountAuthorization.mu.Unlock()
 }
 
 // probeOutcome is what one upstream answer means for the rest of the walk.
@@ -1031,6 +1306,9 @@ const (
 	// walk and rest the account -- trying more exits is what turned a handful of
 	// 312s into 21 429s.
 	probeOutcomeAccountLimited
+	// probeOutcomeReauthorizationRequired is separate from a temporary cooldown:
+	// waiting or changing exit cannot repair an expired/revoked credential.
+	probeOutcomeReauthorizationRequired
 )
 
 // probeBucketHasEligibleExit reports whether any exit is allowed to fire for this
@@ -1115,12 +1393,19 @@ func probeFireUpstream(ctx context.Context, client *http.Client, cred probeCrede
 	request.Header.Set("Session-Id", probeUUID())
 	request.Header.Set("User-Agent", probeUserAgent)
 
+	// Count actual outbound attempts, including transport failures. This counter
+	// is only attached to an explicit manual acquisition; background and business
+	// calls carry no counter and pay no synchronization cost here.
+	if !probeCountAttempt(ctx) {
+		return 0, "", errTicketAttemptLimit
+	}
 	response, errDo := client.Do(request)
 	if errDo != nil {
 		return 0, "", errDo
 	}
 	defer func() { _ = response.Body.Close() }()
-	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, probeMaxBodyBytes))
+	// A ticket is already available in the headers. Do not wait for the SSE
+	// body: an unfinished stream must not hold a business request until timeout.
 	return response.StatusCode, response.Header.Get(turnStateHeader), nil
 }
 
