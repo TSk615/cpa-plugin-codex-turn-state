@@ -45,6 +45,117 @@ CLIProxyAPI（CPA）原生插件，用于保存并复用上游返回的
 WebSocket 会被明确拒绝。CPA 会复用已经完成握手的连接，插件无法保证连接里的请求头能
 随每条业务请求更新，因此当前实现不对 WebSocket 作错误承诺。
 
+## 部署
+
+插件需要安装到 **CPA 自己的 `plugins.dir`**，不是 CPAMP 的程序目录。CPAMP 可以用来
+打开插件看板，但实际加载 `.so` 的进程是 CPA。
+
+### 1. 构建动态库
+
+Linux AMD64 可以在安装了 Docker 的构建机上执行：
+
+```bash
+git clone https://github.com/TSk615/cpa-plugin-codex-turn-state.git
+cd cpa-plugin-codex-turn-state
+bash scripts/build.sh
+```
+
+产物为：
+
+```text
+build/linux/amd64/codex-turn-state.so
+```
+
+脚本使用临时 Go 容器构建，不要求宿主安装 Go。动态库是 cgo `c-shared` 产物，因此
+目标系统和 CPU 架构必须匹配。ARM64 服务器需要在其他构建机上以
+`GOOS=linux GOARCH=arm64 CGO_ENABLED=1` 配合 ARM64 C 交叉编译器生成产物；低内存
+生产服务器只安装成品，不建议现场构建。
+
+### 2. 安装到 CPA 插件目录
+
+先确认 CPA 配置或启动参数里的 `plugins.dir`。该目录通常按系统和架构分层：
+
+```text
+<plugins.dir>/linux/amd64/
+<plugins.dir>/linux/arm64/
+```
+
+将产物放到匹配的目录：
+
+```bash
+PLUGIN_ROOT=/path/to/cpa-plugins
+ARCH=amd64                       # ARM64 改为 arm64
+INSTALL_DIR="$PLUGIN_ROOT/linux/$ARCH"
+
+mkdir -p "$INSTALL_DIR"
+install -m 0755 build/linux/$ARCH/codex-turn-state.so \
+  "$INSTALL_DIR/.codex-turn-state.so.new"
+mv -f "$INSTALL_DIR/.codex-turn-state.so.new" \
+  "$INSTALL_DIR/codex-turn-state.so"
+```
+
+使用同一文件系统里的临时文件再 `mv`，可以避免直接覆盖正在加载的动态库。首次安装没有
+旧文件；升级时建议先复制一份 `.so` 作为回滚版本。
+
+如果 CPA 运行在 Docker 中，宿主上的 `PLUGIN_ROOT` 必须挂载到容器配置的
+`plugins.dir`。`store_dir` 同样填写**容器内路径**，并挂载持久化目录，例如：
+
+```yaml
+services:
+  cpa:
+    volumes:
+      - ./cpa-plugins:/CLIProxyAPI/plugins
+      - ./cpa-data:/data
+```
+
+对应的插件目录和票存储目录可以设置为：
+
+```text
+plugins.dir = /CLIProxyAPI/plugins
+store_dir   = /data/turn-state-store
+```
+
+### 3. 合并插件配置
+
+把下一节的 `plugins.configs.codex-turn-state` 合并进 CPA 的 `config.yaml`。不要用示例
+文件覆盖原配置，否则可能删除其他插件、账号或服务设置。
+
+首次部署建议保持 `on_demand: false`，先启动 CPA 并确认插件成功加载，再从看板选择账号
+和模型、设置次数与时间，最后开启按需打票。
+
+### 4. 重启 CPA
+
+CPA 只在启动时加载动态库。首次安装或替换 `.so` 后必须重启 CPA，例如：
+
+```bash
+docker restart <CPA容器名>
+```
+
+只保存看板中的按需设置通常不需要重启。
+
+### 5. 验证
+
+假设 CPA 监听 `127.0.0.1:8317`：
+
+```bash
+BASE=http://127.0.0.1:8317
+RES="$BASE/v0/resource/plugins/codex-turn-state"
+
+curl -f "$BASE/healthz"
+curl -f "$RES/status"
+curl -f "$RES/dashboard" | head
+```
+
+同时检查 CPA 日志，应看到插件被加载和注册；`status` 中应包含 `role`、`on_demand`、
+`on_demand_max_attempts` 与 `on_demand_timeout_seconds`。如果看板或 `status` 返回 404，
+通常是动态库没有放进 CPA 实际使用的 `plugins.dir`、架构目录不匹配，或 CPA 尚未重启。
+
+### 6. 升级与回滚
+
+升级前备份当前 `.so`，本地构建新产物后上传，按上面的临时文件加 `mv` 方式替换并重启
+CPA。出现问题时恢复备份的 `.so` 再重启即可。票库和 `runtime.json` 位于 `store_dir`，
+替换动态库不会主动删除它们。
+
 ## 配置
 
 ```yaml
