@@ -50,28 +50,87 @@ WebSocket 会被明确拒绝。CPA 会复用已经完成握手的连接，插件
 插件需要安装到 **CPA 自己的 `plugins.dir`**，不是 CPAMP 的程序目录。CPAMP 可以用来
 打开插件看板，但实际加载 `.so` 的进程是 CPA。
 
-### 1. 构建动态库
+### 1. 确认 CPA 的平台
 
-Linux AMD64 可以在安装了 Docker 的构建机上执行：
+CPA 只会加载与自己 **操作系统和 CPU 架构完全一致**的动态库。常见对应关系：
+
+| CPA 平台 | Go 平台 | 插件目录 | 产物名 |
+|---|---|---|---|
+| Linux x86-64 | `linux/amd64` | `plugins/linux/amd64` | `codex-turn-state.so` |
+| Linux ARM64 / aarch64 | `linux/arm64` | `plugins/linux/arm64` | `codex-turn-state.so` |
+| macOS Intel | `darwin/amd64` | `plugins/darwin/amd64` | `codex-turn-state.dylib` |
+| macOS Apple Silicon | `darwin/arm64` | `plugins/darwin/arm64` | `codex-turn-state.dylib` |
+| Windows x86-64 | `windows/amd64` | `plugins/windows/amd64` | `codex-turn-state.dll` |
+
+CPA 也支持 FreeBSD `.so`。动态库不能跨平台使用，例如 Linux AMD64 的 `.so` 不能放到
+Linux ARM64，也不能放到 Windows。
+
+### 2. 构建 Linux AMD64 或 ARM64
+
+仓库脚本支持两个 Linux 架构。可以在安装了 Docker 的开发机或 CI 上构建，不需要在
+生产服务器执行：
 
 ```bash
 git clone https://github.com/TSk615/cpa-plugin-codex-turn-state.git
 cd cpa-plugin-codex-turn-state
+# Linux AMD64
 bash scripts/build.sh
+
+# Linux ARM64
+TARGETARCH=arm64 bash scripts/build.sh
 ```
 
-产物为：
+对应产物为：
 
 ```text
 build/linux/amd64/codex-turn-state.so
+build/linux/arm64/codex-turn-state.so
 ```
 
-脚本使用临时 Go 容器构建，不要求宿主安装 Go。动态库是 cgo `c-shared` 产物，因此
-目标系统和 CPU 架构必须匹配。ARM64 服务器需要在其他构建机上以
-`GOOS=linux GOARCH=arm64 CGO_ENABLED=1` 配合 ARM64 C 交叉编译器生成产物；低内存
-生产服务器只安装成品，不建议现场构建。
+脚本会为目标架构启动 `golang:1.26` 容器。Docker Desktop 通常可以通过 QEMU 在 x86
+机器构建 ARM64；普通 Linux Docker 如果没有安装 `binfmt/qemu-user-static`，可能报
+`exec format error`。此时应在 ARM64 CI/构建机运行，或使用 Zig 作为 C 交叉编译器。
 
-### 2. 安装到 CPA 插件目录
+该插件是 cgo `c-shared` 产物，还需要满足目标系统的 libc 兼容性。部署前可在与 CPA
+相同的镜像中执行 `ldd`：
+
+```bash
+docker run --rm \
+  -v "$PWD/build/linux/arm64:/check:ro" \
+  --entrypoint ldd <CPA镜像> /check/codex-turn-state.so
+```
+
+出现 `not found` 或 `GLIBC_x.xx not found` 时不要部署，应换用与 CPA 基础系统兼容的
+Go 构建镜像。低内存服务器只安装构建好的成品。
+
+### 3. 构建 macOS、Windows 或 FreeBSD
+
+其他系统需要在对应平台安装 Go 1.26 和可供 cgo 使用的 C 编译器。macOS Apple
+Silicon 示例：
+
+```bash
+mkdir -p build/darwin/arm64
+cd go
+CGO_ENABLED=1 GOOS=darwin GOARCH=arm64 \
+  go build -buildmode=c-shared \
+  -o ../build/darwin/arm64/codex-turn-state.dylib .
+```
+
+Windows AMD64 PowerShell 示例（需要 MinGW-w64 GCC 或等价编译器）：
+
+```powershell
+New-Item -ItemType Directory -Force build/windows/amd64 | Out-Null
+$env:CGO_ENABLED = "1"
+$env:GOOS = "windows"
+$env:GOARCH = "amd64"
+go -C go build -buildmode=c-shared `
+  -o ../build/windows/amd64/codex-turn-state.dll .
+```
+
+平台扩展名分别为 Linux/FreeBSD `.so`、macOS `.dylib`、Windows `.dll`，产物必须放入
+对应的 `<GOOS>/<GOARCH>` 目录。
+
+### 4. 安装到 CPA 插件目录
 
 先确认 CPA 配置或启动参数里的 `plugins.dir`。该目录通常按系统和架构分层：
 
@@ -115,7 +174,7 @@ plugins.dir = /CLIProxyAPI/plugins
 store_dir   = /data/turn-state-store
 ```
 
-### 3. 合并插件配置
+### 5. 合并插件配置
 
 把下一节的 `plugins.configs.codex-turn-state` 合并进 CPA 的 `config.yaml`。不要用示例
 文件覆盖原配置，否则可能删除其他插件、账号或服务设置。
@@ -123,7 +182,7 @@ store_dir   = /data/turn-state-store
 首次部署建议保持 `on_demand: false`，先启动 CPA 并确认插件成功加载，再从看板选择账号
 和模型、设置次数与时间，最后开启按需打票。
 
-### 4. 重启 CPA
+### 6. 重启 CPA
 
 CPA 只在启动时加载动态库。首次安装或替换 `.so` 后必须重启 CPA，例如：
 
@@ -133,7 +192,7 @@ docker restart <CPA容器名>
 
 只保存看板中的按需设置通常不需要重启。
 
-### 5. 验证
+### 7. 验证
 
 假设 CPA 监听 `127.0.0.1:8317`：
 
@@ -150,7 +209,7 @@ curl -f "$RES/dashboard" | head
 `on_demand_max_attempts` 与 `on_demand_timeout_seconds`。如果看板或 `status` 返回 404，
 通常是动态库没有放进 CPA 实际使用的 `plugins.dir`、架构目录不匹配，或 CPA 尚未重启。
 
-### 6. 升级与回滚
+### 8. 升级与回滚
 
 升级前备份当前 `.so`，本地构建新产物后上传，按上面的临时文件加 `mv` 方式替换并重启
 CPA。出现问题时恢复备份的 `.so` 再重启即可。票库和 `runtime.json` 位于 `store_dir`，
