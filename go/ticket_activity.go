@@ -23,6 +23,7 @@ type ticketActivity struct {
 	Model          string `json:"model"`
 	RequestTicket  string `json:"request_ticket,omitempty"`
 	ResponseTicket string `json:"response_ticket,omitempty"`
+	ResponseSource string `json:"response_ticket_source,omitempty"`
 	Message        string `json:"message,omitempty"`
 	ExpiresAt      string `json:"expires_at,omitempty"`
 	SecondsLeft    int64  `json:"seconds_left,omitempty"`
@@ -84,10 +85,18 @@ func ticketLengthLabelFor(value string, templateLength, replaceLength int) strin
 }
 
 func observeTicketResponse(requestID string, headers http.Header, model string, templateLength, replaceLength int) {
+	value := headerValue(headers, turnStateHeader)
+	source := ""
+	if value != "" {
+		source = "HTTP 响应头"
+	}
+	observeTicketResponseValue(requestID, value, source, model, templateLength, replaceLength)
+}
+
+func observeTicketResponseValue(requestID, value, source, model string, templateLength, replaceLength int) {
 	if strings.TrimSpace(requestID) == "" {
 		return
 	}
-	value := headerValue(headers, turnStateHeader)
 	responseTicket := ticketLengthLabelFor(value, templateLength, replaceLength)
 	var account string
 	var authID string
@@ -107,6 +116,9 @@ func observeTicketResponse(requestID string, headers http.Header, model string, 
 			responseTicket = "上游未返回票（状态无法确认；下次仍注入请求292）"
 		}
 		ticketActivities.items[i].ResponseTicket = responseTicket
+		if value != "" {
+			ticketActivities.items[i].ResponseSource = source
+		}
 		if strings.TrimSpace(model) != "" && ticketActivities.items[i].Model == "" {
 			ticketActivities.items[i].Model = model
 		}
@@ -119,7 +131,11 @@ func observeTicketResponse(requestID string, headers http.Header, model string, 
 	}
 	ticketActivities.Unlock()
 	if matched {
-		logDecision("response", account, model, len(value), "业务响应票="+responseTicket)
+		reason := "业务响应票=" + responseTicket
+		if source != "" {
+			reason += " 来源=" + source
+		}
+		logDecision("response", account, model, len(value), reason)
 		if len(value) == replaceLength && requestTicket == "292" {
 			if strings.TrimSpace(model) == "" {
 				model = activityModel
@@ -127,6 +143,20 @@ func observeTicketResponse(requestID string, headers http.Header, model string, 
 			scheduleRefreshAfter312(authID, model)
 		}
 	}
+}
+
+func ticketActivityNeedsStreamMetadata(requestID string) bool {
+	if strings.TrimSpace(requestID) == "" {
+		return false
+	}
+	ticketActivities.Lock()
+	defer ticketActivities.Unlock()
+	for i := range ticketActivities.items {
+		if ticketActivities.items[i].RequestID == requestID {
+			return ticketActivities.items[i].ResponseSource == ""
+		}
+	}
+	return false
 }
 
 func currentTTLSeconds() int {

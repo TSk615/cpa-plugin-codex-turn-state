@@ -1615,7 +1615,8 @@ function renderTicketActivity(d) {
     var ticketFlow = [];
     if (a.request_ticket) { ticketFlow.push("请求票：" + a.request_ticket); }
     if (a.response_ticket) {
-      ticketFlow.push("响应票：" + a.response_ticket);
+      var responseSource = a.response_ticket_source ? ("（" + a.response_ticket_source + "）") : "";
+      ticketFlow.push("响应票" + responseSource + "：" + a.response_ticket);
     } else if (a.kind === "request") {
       ticketFlow.push("响应票：等待响应");
     }

@@ -1238,9 +1238,10 @@ func interceptResponse(raw []byte) ([]byte, error) {
 
 // interceptStreamChunk is the in-band harvest point for SSE responses, which is
 // the path real Codex traffic actually takes. Response headers are only
-// populated on the header-init call, so every payload chunk is returned
-// untouched without even looking at it -- this must stay cheap, it runs on every
-// chunk of every stream.
+// populated on the header-init call. Codex can also report the turn-state in a
+// later codex.response.metadata SSE event, so on-demand business traffic scans
+// payload chunks for that one event. The scan is bounded and observational: it
+// never returns a replacement body or delays the stream.
 //
 // Runs in both roles, and on the header-init chunk CPA supplies the raw upstream
 // headers alongside the same metadata the request hook saw, so the harvest is
@@ -1250,15 +1251,23 @@ func interceptStreamChunk(raw []byte) ([]byte, error) {
 	if errUnmarshal := json.Unmarshal(raw, &req); errUnmarshal != nil {
 		return nil, errUnmarshal
 	}
-	if req.ChunkIndex != pluginapi.StreamChunkHeaderInitIndex {
-		return okEnvelope(pluginapi.StreamChunkInterceptResponse{})
-	}
 	state.mu.Lock()
 	cfg := state.config
 	state.mu.Unlock()
 
 	if cfg.OnDemand {
-		observeTicketResponse(req.RequestID, req.ResponseHeaders, pickModel(req.Model, req.RequestedModel), cfg.TemplateLength, cfg.ReplaceLength)
+		model := pickModel(req.Model, req.RequestedModel)
+		if req.ChunkIndex == pluginapi.StreamChunkHeaderInitIndex {
+			resetResponseTicketStreamScan(req.RequestID)
+			observeTicketResponse(req.RequestID, req.ResponseHeaders, model, cfg.TemplateLength, cfg.ReplaceLength)
+		} else if ticketActivityNeedsStreamMetadata(req.RequestID) {
+			if value, found := scanResponseTicketStream(req.RequestID, req.Body); found {
+				observeTicketResponseValue(req.RequestID, value, "SSE metadata", model, cfg.TemplateLength, cfg.ReplaceLength)
+			}
+		}
+		return okEnvelope(pluginapi.StreamChunkInterceptResponse{})
+	}
+	if req.ChunkIndex != pluginapi.StreamChunkHeaderInitIndex {
 		return okEnvelope(pluginapi.StreamChunkInterceptResponse{})
 	}
 	harvestFromResponse(cfg, req.ResponseHeaders, req.Metadata, pickModel(req.Model, req.RequestedModel), req.RequestID)
