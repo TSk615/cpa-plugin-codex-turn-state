@@ -16,14 +16,17 @@ import (
 // ticketActivity is deliberately value-free: the dashboard can explain what
 // happened without ever receiving the credential-adjacent ticket blob.
 type ticketActivity struct {
-	At          string `json:"at"`
-	Kind        string `json:"kind"`   // manual, request or passive
-	Result      string `json:"result"` // acquired, reused or failed
-	Account     string `json:"account"`
-	Model       string `json:"model"`
-	Message     string `json:"message,omitempty"`
-	ExpiresAt   string `json:"expires_at,omitempty"`
-	SecondsLeft int64  `json:"seconds_left,omitempty"`
+	At             string `json:"at"`
+	Kind           string `json:"kind"`   // manual, request or passive
+	Result         string `json:"result"` // acquired, reused or failed
+	Account        string `json:"account"`
+	Model          string `json:"model"`
+	RequestTicket  string `json:"request_ticket,omitempty"`
+	ResponseTicket string `json:"response_ticket,omitempty"`
+	Message        string `json:"message,omitempty"`
+	ExpiresAt      string `json:"expires_at,omitempty"`
+	SecondsLeft    int64  `json:"seconds_left,omitempty"`
+	RequestID      string `json:"-"`
 }
 
 var ticketActivities = struct {
@@ -34,14 +37,20 @@ var ticketActivities = struct {
 const ticketActivityLimit = 50
 
 func recordTicketActivity(kind, result, account, model, message, value string) ticketActivity {
+	return recordTicketActivityForRequest(kind, result, account, model, message, value, "", "")
+}
+
+func recordTicketActivityForRequest(kind, result, account, model, message, value, requestID, requestTicket string) ticketActivity {
 	now := time.Now()
 	event := ticketActivity{
-		At:      now.UTC().Format(time.RFC3339),
-		Kind:    kind,
-		Result:  result,
-		Account: maskAuthLabel(account),
-		Model:   model,
-		Message: message,
+		At:            now.UTC().Format(time.RFC3339),
+		Kind:          kind,
+		Result:        result,
+		Account:       maskAuthLabel(account),
+		Model:         model,
+		Message:       message,
+		RequestTicket: requestTicket,
+		RequestID:     requestID,
 	}
 	if issued, ok := fernetIssuedAt(value); ok {
 		expires := issued.Add(time.Duration(currentTTLSeconds()) * time.Second)
@@ -57,6 +66,46 @@ func recordTicketActivity(kind, result, account, model, message, value string) t
 	}
 	ticketActivities.Unlock()
 	return event
+}
+
+func ticketLengthLabelFor(value string, templateLength, replaceLength int) string {
+	switch len(value) {
+	case templateLength:
+		return "292"
+	case replaceLength:
+		return "312"
+	case 0:
+		return "无票头"
+	default:
+		return fmt.Sprintf("其他长度(%d)", len(value))
+	}
+}
+
+func observeTicketResponse(requestID string, headers http.Header, model string, templateLength, replaceLength int) {
+	if strings.TrimSpace(requestID) == "" {
+		return
+	}
+	value := headerValue(headers, turnStateHeader)
+	responseTicket := ticketLengthLabelFor(value, templateLength, replaceLength)
+	var account string
+	var matched bool
+	ticketActivities.Lock()
+	for i := range ticketActivities.items {
+		if ticketActivities.items[i].RequestID != requestID {
+			continue
+		}
+		ticketActivities.items[i].ResponseTicket = responseTicket
+		if strings.TrimSpace(model) != "" && ticketActivities.items[i].Model == "" {
+			ticketActivities.items[i].Model = model
+		}
+		account = ticketActivities.items[i].Account
+		matched = true
+		break
+	}
+	ticketActivities.Unlock()
+	if matched {
+		logDecision("response", account, model, len(value), "业务响应票="+responseTicket)
+	}
 }
 
 func currentTTLSeconds() int {

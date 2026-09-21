@@ -190,7 +190,7 @@ func interceptOnDemand(req pluginapi.RequestInterceptRequest, cfg pluginConfig) 
 	if hadTicket {
 		result, message = "reused", "沿用未过期的 292 票并放行；"+outcomes
 	}
-	recordTicketActivity("request", result, account, model, message, value)
+	recordTicketActivityForRequest("request", result, account, model, message, value, req.RequestID, ticketLengthLabelFor(value, cfg.TemplateLength, cfg.ReplaceLength))
 	logDecision("inject", account, model, len(headerValue(req.Headers, turnStateHeader)), "on-demand: valid account/model ticket")
 	return okEnvelope(pluginapi.RequestInterceptResponse{
 		ClearHeaders: []string{turnStateHeader}, Headers: http.Header{turnStateHeader: {value}},

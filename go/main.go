@@ -1209,6 +1209,14 @@ func interceptResponse(raw []byte) ([]byte, error) {
 	cfg := state.config
 	state.mu.Unlock()
 
+	if cfg.OnDemand {
+		// The on-demand request path already owns the ticket decision. Do not
+		// passively save the business response as a new ticket, but do record
+		// which state the upstream actually returned for the request we just
+		// released.
+		observeTicketResponse(req.RequestID, req.ResponseHeaders, pickModel(req.Model, req.RequestedModel), cfg.TemplateLength, cfg.ReplaceLength)
+		return okEnvelope(pluginapi.ResponseInterceptResponse{})
+	}
 	harvestFromResponse(cfg, req.ResponseHeaders, req.Metadata, pickModel(req.Model, req.RequestedModel), req.RequestID)
 	return okEnvelope(pluginapi.ResponseInterceptResponse{})
 }
@@ -1234,6 +1242,10 @@ func interceptStreamChunk(raw []byte) ([]byte, error) {
 	cfg := state.config
 	state.mu.Unlock()
 
+	if cfg.OnDemand {
+		observeTicketResponse(req.RequestID, req.ResponseHeaders, pickModel(req.Model, req.RequestedModel), cfg.TemplateLength, cfg.ReplaceLength)
+		return okEnvelope(pluginapi.StreamChunkInterceptResponse{})
+	}
 	harvestFromResponse(cfg, req.ResponseHeaders, req.Metadata, pickModel(req.Model, req.RequestedModel), req.RequestID)
 	return okEnvelope(pluginapi.StreamChunkInterceptResponse{})
 }

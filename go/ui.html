@@ -212,6 +212,7 @@ header.bar { margin-bottom: 22px; padding: 0 2px; }
 .activity-pill.ok { color: var(--ok); background: var(--ok-bg); border-color: var(--ok); }
 .activity-pill.err { color: var(--bad); background: var(--bad-bg); border-color: var(--bad); }
 .activity-message { overflow-wrap: anywhere; }
+.activity-ticket-flow { color: var(--text); font-weight: 600; }
 .system-status { margin-top: 14px; }
 .system-status > summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .system-status .badges { margin-top: 10px; }
@@ -1584,6 +1585,13 @@ function renderTicketActivity(d) {
     var expiry = a.seconds_left > 0
       ? ("剩余 " + fmtLeft(a.seconds_left) + "，到期 " + fmtTime(a.expires_at))
       : (a.expires_at ? ("已过期 " + fmtTime(a.expires_at)) : "未取得有效票");
+    var ticketFlow = [];
+    if (a.request_ticket) { ticketFlow.push("请求票：" + a.request_ticket); }
+    if (a.response_ticket) {
+      ticketFlow.push("响应票：" + a.response_ticket);
+    } else if (a.kind === "request") {
+      ticketFlow.push("响应票：等待响应");
+    }
     box.appendChild(el("div", { cls: "activity-row" }, [
       el("div", { cls: "activity-when", text: timeText }),
       el("div", { cls: "activity-account", text: (a.account || "—") + " / " + (a.model || "—") }),
@@ -1592,9 +1600,10 @@ function renderTicketActivity(d) {
         el("span", { text: activityTitle(a) })
       ]),
       el("div", { cls: "activity-meta" }, [
+        ticketFlow.length ? el("div", { cls: "activity-ticket-flow", text: ticketFlow.join("；") }) : null,
         el("div", { text: expiry }),
         el("div", { cls: "activity-message", text: a.message || "" })
-      ])
+      ].filter(Boolean))
     ]));
   });
 }

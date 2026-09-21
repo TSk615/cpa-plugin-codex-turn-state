@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
 )
 
@@ -344,6 +345,35 @@ func resetTicketActivitiesForTest(t *testing.T) {
 		ticketActivities.items = old
 		ticketActivities.Unlock()
 	})
+}
+
+func TestOnDemandActivitySeparatesRequestAndResponseTicket(t *testing.T) {
+	resetTicketActivitiesForTest(t)
+	cfg := demandSetup(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("a valid cached ticket should not trigger a probe")
+	})
+	rec := storeRecordFor(probeTestAccount, "model-a", time.Now().Add(-time.Minute), 292)
+	mustWriteRecord(t, cfg.StoreDir, rec)
+	req := demandRequest(probeTestAccount, "model-a")
+	req.RequestID = "business-request-1"
+	if resp := interceptAfter(t, req); resp.Terminate || outgoingHeader(resp) != rec.Value {
+		t.Fatal("cached ticket was not injected")
+	}
+	raw, err := json.Marshal(pluginapi.ResponseInterceptRequest{
+		RequestID:       req.RequestID,
+		Model:           "model-a",
+		ResponseHeaders: http.Header{turnStateHeader: {fakeToken(312, time.Now())}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = handleMethod(pluginabi.MethodResponseInterceptAfter, raw); err != nil {
+		t.Fatal(err)
+	}
+	activity := ticketActivitySnapshot()
+	if len(activity) != 1 || activity[0].RequestTicket != "292" || activity[0].ResponseTicket != "312" {
+		t.Fatalf("request/response ticket labels not recorded: %+v", activity)
+	}
 }
 
 func TestManualTicketAcquireReportsAcquiredThenReused(t *testing.T) {
