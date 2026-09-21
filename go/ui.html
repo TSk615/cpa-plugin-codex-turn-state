@@ -573,7 +573,7 @@ select {
       <div>
         <div class="eyebrow">Manual ticket</div>
         <h2>立即打票</h2>
-        <p class="lead">选择一个账号和模型。普通打票会遵守账号冷却；“强制打票”可绕过本地冷却，并按上方设置的次数和时间停止。结果会列出 292、312 和错误次数。</p>
+        <p class="lead">选择一个账号和模型。接受 292 和 Team 332 票。普通打票会遵守账号冷却；“强制打票”可绕过本地冷却，并按上方设置的次数和时间停止。结果会列出返回票长度和错误次数。</p>
       </div>
       <div class="manual-form">
         <div class="field">
@@ -969,7 +969,7 @@ function renderBadges(d) {
         d.dry_run ? "dry-on" : "dry-off");
   badge("inject_mode", d.on_demand ? "按需模式始终注入有效票" : (d.inject_mode || "—"));
   badge("ttl", (d.ttl_seconds || 0) + "s");
-  badge("长度", (d.template_length || 0) + " → 换 " + (d.replace_length || 0));
+  badge("有效票", d.template_length === 292 ? "292 / Team 332" : String(d.template_length || 0));
   badge("store_dir", d.store_dir || "—");
   // 陈述访问性质：这个页面上的每一个动作都不鉴权 —— 看数据、四个操作、保存
   // 探测范围。谁打开页面都该知道这条边界在哪：能摸到这个端口就能改这些。
@@ -2335,7 +2335,7 @@ function doToggleDryRun() {
       lines: [
         { text: "关闭后插件将开始改写真实业务流量：凡是带 " + (d.replace_length || 312) +
                 " 长度 X-Codex-Turn-State 的请求，都会被替换成 store 里该桶的 " +
-                (d.template_length || 292) + " 再发往上游。" },
+                (d.template_length === 292 ? "292 / Team 332" : (d.template_length || 292)) + " 再发往上游。" },
         { text: "在此之前这些替换只出现在日志里，上游收到的仍是原值。", em: true },
         { text: "回滚方式：把 dry_run 重新打开即可，无需重启。" }
       ]
@@ -2424,9 +2424,9 @@ function doManualAcquire(force) {
   var started = Date.now();
   var ticker = null;
   if (force) {
-    result.textContent = "正在强制打票：最多请求上游 " + maxAttempts + " 次，" + timeout + " 秒兜底；拿到 292 或遇到账号级错误会提前停止。";
+    result.textContent = "正在强制打票：最多请求上游 " + maxAttempts + " 次，" + timeout + " 秒兜底；拿到 292 / Team 332 或遇到账号级错误会提前停止。";
   } else {
-    result.textContent = "正在检查现有票；缺票时会等待上游返回 292，最长 " + timeout + " 秒。";
+    result.textContent = "正在检查现有票；缺票时会等待上游返回 292 / Team 332，最长 " + timeout + " 秒。";
     ticker = setInterval(function () {
       var elapsed = Math.floor((Date.now() - started) / 1000);
       result.textContent = "正在等待；已用 " + elapsed + " 秒，最长 " + timeout + " 秒。";
@@ -2438,7 +2438,7 @@ function doManualAcquire(force) {
       result.className = "manual-result ok";
       result.textContent = (reused
         ? "已有有效票，本次未请求上游。"
-        : ("打票成功，292 票已保存；" + (r.outcome_summary || ("尝试 " + (Number(r.attempts) || 0) + " 次")) + "。")) +
+        : ("打票成功，有效票已保存；" + (r.outcome_summary || ("尝试 " + (Number(r.attempts) || 0) + " 次")) + "。")) +
         (r.seconds_left > 0 ? (" 剩余 " + fmtLeft(r.seconds_left) + "，到期 " + fmtTime(r.expires_at) + "。") : "");
       notify("ok", accountLabel(account) + " / " + model + "：" + result.textContent);
       return refresh();

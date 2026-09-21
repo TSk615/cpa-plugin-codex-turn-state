@@ -1119,8 +1119,9 @@ type statusResponse struct {
 
 // statusAccount is one credential row of the readiness matrix.
 type statusAccount struct {
-	AuthID  string
-	Enabled bool
+	AuthID   string
+	Enabled  bool
+	PlanType string
 }
 
 // handleStatus reports configuration, bucket readiness and decision tallies.
@@ -1635,7 +1636,7 @@ func listCodexAuths() ([]statusAccount, error) {
 		// An unavailable credential cannot answer a request either, so it is
 		// reported the same way a disabled one is: the operator's question is
 		// "can this bucket be filled right now", not "which flag is set".
-		out = append(out, statusAccount{AuthID: name, Enabled: !file.Disabled && !file.Unavailable})
+		out = append(out, statusAccount{AuthID: name, Enabled: !file.Disabled && !file.Unavailable, PlanType: file.AccountType})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].AuthID < out[j].AuthID })
 	return out, nil

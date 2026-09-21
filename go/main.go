@@ -792,8 +792,8 @@ func configure(raw []byte) error {
 	if cfg.ReplaceLength < 1 {
 		return fmt.Errorf("replace_length must be greater than zero")
 	}
-	if cfg.TemplateLength == cfg.ReplaceLength {
-		return fmt.Errorf("template_length and replace_length must differ, both are %d", cfg.TemplateLength)
+	if isTemplateLength(cfg.ReplaceLength, cfg.TemplateLength) {
+		return fmt.Errorf("replace_length %d conflicts with an accepted template length", cfg.ReplaceLength)
 	}
 	if cfg.TTLSeconds < 1 {
 		return fmt.Errorf("ttl_seconds must be greater than zero")
@@ -1157,6 +1157,10 @@ func interceptAfterAuth(raw []byte) ([]byte, error) {
 	}
 
 	now := time.Now()
+	requestPlan := ""
+	if cfg.HarvestInband {
+		requestPlan = accountPlanFromHost(authID)
+	}
 	state.mu.Lock()
 	ttl := cfg.ttl()
 
@@ -1164,7 +1168,7 @@ func interceptAfterAuth(raw []byte) ([]byte, error) {
 	// is unreachable as configured today and deliberately so: it exists only as
 	// a single-box fallback for a deployment with no probe at all.
 	harvestedOK := false
-	if cfg.HarvestInband && len(value) == cfg.TemplateLength {
+	if cfg.HarvestInband && isAccountTemplateLength(len(value), cfg.TemplateLength, requestPlan) {
 		state.sweepLocked(now)
 		issued, ok := fernetIssuedAt(value)
 		if !ok {
@@ -1413,7 +1417,7 @@ func harvestFromResponse(cfg pluginConfig, headers http.Header, metadata map[str
 	// the probe and in-band harvest is forced off for business, so this path is
 	// already unreachable there. It is written out anyway so the rule reads
 	// completely here instead of resting on a registration elsewhere.
-	recognisedLen := len(value) == cfg.TemplateLength || len(value) == cfg.ReplaceLength
+	recognisedLen := isTemplateLength(len(value), cfg.TemplateLength) || len(value) == cfg.ReplaceLength
 	if authID == "" && model != "" && recognisedLen && cfg.isProbe() {
 		sole, enabledCount, errSole := soleEnabledCodexAuth()
 		switch {
@@ -1421,13 +1425,13 @@ func harvestFromResponse(cfg pluginConfig, headers http.Header, metadata map[str
 			// A 292 we cannot attribute is genuinely unharvestable, so it stops
 			// here. A 312 falls through to the degraded-state log, still worth
 			// emitting with auth=- so the throttling is visible.
-			if len(value) == cfg.TemplateLength {
+			if isTemplateLength(len(value), cfg.TemplateLength) {
 				logDecision("skip", "", model, len(value),
 					"incomplete bucket key; cannot infer: credential list unavailable: "+errSole.Error())
 				return
 			}
 		case sole == "":
-			if len(value) == cfg.TemplateLength {
+			if isTemplateLength(len(value), cfg.TemplateLength) {
 				logDecision("skip", "", model, len(value),
 					fmt.Sprintf("incomplete bucket key; refusing to infer: %d enabled Codex accounts, need exactly 1", enabledCount))
 				return
@@ -1454,7 +1458,8 @@ func harvestFromResponse(cfg pluginConfig, headers http.Header, metadata map[str
 		logDecision("skip", authID, model, len(value), "incomplete bucket key")
 		return
 	}
-	if len(value) != cfg.TemplateLength {
+	plan := accountPlanFromHost(authID)
+	if !isAccountTemplateLength(len(value), cfg.TemplateLength, plan) {
 		// Neither a template nor the known degraded length. Nothing to harvest.
 		logDecision("pass", authID, model, len(value), "length not template")
 		return
@@ -1486,6 +1491,7 @@ func harvestFromResponse(cfg pluginConfig, headers http.Header, metadata map[str
 		IssuedAt:    issued.UTC().Format(time.RFC3339),
 		HarvestedAt: now.UTC().Format(time.RFC3339),
 		Attribution: attribution,
+		PlanType:    plan,
 	}
 	if errWrite := writeStoreRecord(cfg.StoreDir, record, cfg.TemplateLength); errWrite != nil {
 		logDecision("skip", authID, model, len(value), "store write failed: "+errWrite.Error())
@@ -1501,7 +1507,7 @@ func harvestFromResponse(cfg pluginConfig, headers http.Header, metadata map[str
 	state.mu.Lock()
 	state.buckets[key] = templateEntry{value: value, issuedAt: issued}
 	state.mu.Unlock()
-	recordTicketActivity("passive", "acquired", authID, model, "从正常业务响应中保存了 292 票", value)
+	recordTicketActivity("passive", "acquired", authID, model, fmt.Sprintf("从正常业务响应中保存了 %d 票", len(value)), value)
 
 	// Inferred attributions are logged differently on purpose. "This bucket
 	// belongs to account X" and "this bucket belongs to the only account that
@@ -1620,6 +1626,7 @@ type storeRecord struct {
 	Value       string `json:"value"`
 	IssuedAt    string `json:"issued_at"`
 	HarvestedAt string `json:"harvested_at"`
+	PlanType    string `json:"plan_type,omitempty"`
 	// Attribution records how auth_id was determined: "observed" when the host
 	// told us, "inferred" when it was deduced from a sole enabled account. A
 	// wrong attribution hands one account's token to another, which is the first
@@ -1682,8 +1689,8 @@ func writeStoreRecord(dir string, rec storeRecord, templateLength int) error {
 	if strings.TrimSpace(dir) == "" {
 		return fmt.Errorf("store_dir is empty")
 	}
-	if rec.Len != templateLength {
-		return fmt.Errorf("refusing to store len %d: only %d is a template", rec.Len, templateLength)
+	if !isAccountTemplateLength(rec.Len, templateLength, rec.PlanType) {
+		return fmt.Errorf("refusing to store len %d: not an accepted template length", rec.Len)
 	}
 	if len(rec.Value) != rec.Len {
 		return fmt.Errorf("record len %d disagrees with value length %d", rec.Len, len(rec.Value))
@@ -1885,7 +1892,7 @@ func recordIssuedAt(rec storeRecord) (time.Time, bool) {
 // written as root:root 0600, so a disagreement there is not cosmetic: it would
 // let the probe declare itself complete against buckets that cannot be used.
 func recordUsable(rec storeRecord, issued, now time.Time, ttl time.Duration, templateLength int) bool {
-	return rec.Len == templateLength && len(rec.Value) == rec.Len && templateUsable(issued, now, ttl)
+	return isAccountTemplateLength(rec.Len, templateLength, rec.PlanType) && len(rec.Value) == rec.Len && templateUsable(issued, now, ttl)
 }
 
 // loadStore returns every still-live template in the store, keyed by bucketKey.
@@ -1898,7 +1905,7 @@ func loadStore(dir string, now time.Time, ttl time.Duration, templateLength int)
 		return out, errScan
 	}
 	for _, rec := range records {
-		if rec.Len != templateLength || len(rec.Value) != rec.Len {
+		if !isAccountTemplateLength(rec.Len, templateLength, rec.PlanType) || len(rec.Value) != rec.Len {
 			continue
 		}
 		issued, okIssued := recordIssuedAt(rec)

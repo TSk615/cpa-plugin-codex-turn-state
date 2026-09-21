@@ -41,6 +41,7 @@ import (
 type fakeCredSeed struct {
 	name      string
 	accountID string
+	planType  string
 	proxyURL  string
 	disabled  bool
 	exp       time.Time
@@ -58,10 +59,14 @@ type fakeCPA struct {
 // encodeJWT builds a token whose payload carries just the two non-secret claims
 // the harvester reads: exp and the chatgpt account id. The header segment "e30"
 // is base64url("{}"), enough for probeJWTClaims, which only decodes the payload.
-func encodeJWT(exp time.Time, accountID string) string {
+func encodeJWT(exp time.Time, accountID string, planTypes ...string) string {
+	authClaims := map[string]any{"chatgpt_account_id": accountID}
+	if len(planTypes) > 0 && planTypes[0] != "" {
+		authClaims["chatgpt_plan_type"] = planTypes[0]
+	}
 	claims := map[string]any{
 		"exp":                         exp.Unix(),
-		"https://api.openai.com/auth": map[string]any{"chatgpt_account_id": accountID},
+		"https://api.openai.com/auth": authClaims,
 	}
 	raw, _ := json.Marshal(claims)
 	return "e30." + base64.RawURLEncoding.EncodeToString(raw) + ".sig"
@@ -119,6 +124,7 @@ func (f *fakeCPA) serveDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	blob := map[string]any{
 		"account_id":    seed.accountID,
+		"plan_type":     seed.planType,
 		"proxy_url":     seed.proxyURL,
 		"type":          "codex",
 		"disabled":      seed.disabled,
@@ -126,7 +132,7 @@ func (f *fakeCPA) serveDownload(w http.ResponseWriter, r *http.Request) {
 		"refresh_token": "refresh-must-never-be-used",
 	}
 	if !seed.noToken {
-		blob["access_token"] = encodeJWT(seed.exp, seed.accountID)
+		blob["access_token"] = encodeJWT(seed.exp, seed.accountID, seed.planType)
 	}
 	f.writeJSON(w, blob)
 }

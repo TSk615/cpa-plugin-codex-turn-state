@@ -72,12 +72,10 @@ func recordTicketActivityForRequest(kind, result, account, model, message, value
 }
 
 func ticketLengthLabelFor(value string, templateLength, replaceLength int) string {
-	switch len(value) {
-	case templateLength:
-		return "292"
-	case replaceLength:
-		return "312"
-	case 0:
+	switch {
+	case isTemplateLength(len(value), templateLength), len(value) == replaceLength:
+		return fmt.Sprintf("%d", len(value))
+	case len(value) == 0:
 		return "无票头"
 	default:
 		return fmt.Sprintf("其他长度(%d)", len(value))
@@ -112,8 +110,8 @@ func observeTicketResponseValue(requestID, value, source, model string, template
 		// response issues it, successful continuation responses commonly omit the
 		// header; the client keeps replaying the existing value unchanged. Make
 		// that distinct from a headerless request that never carried a ticket.
-		if len(value) == 0 && ticketActivities.items[i].RequestTicket == "292" {
-			responseTicket = "上游未返回票（状态无法确认；下次仍注入请求292）"
+		if len(value) == 0 && isDefaultTicketLabel(ticketActivities.items[i].RequestTicket) {
+			responseTicket = "上游未返回票（状态无法确认；下次仍注入请求" + ticketActivities.items[i].RequestTicket + "）"
 		}
 		ticketActivities.items[i].ResponseTicket = responseTicket
 		if value != "" {
@@ -136,7 +134,7 @@ func observeTicketResponseValue(requestID, value, source, model string, template
 			reason += " 来源=" + source
 		}
 		logDecision("response", account, model, len(value), reason)
-		if len(value) == replaceLength && requestTicket == "292" {
+		if len(value) == replaceLength && isDefaultTicketLabel(requestTicket) {
 			if strings.TrimSpace(model) == "" {
 				model = activityModel
 			}
@@ -187,6 +185,7 @@ type ticketAcquireResponse struct {
 	Attempts          int32  `json:"attempts"`
 	Returned292       int32  `json:"returned_292"`
 	Returned312       int32  `json:"returned_312"`
+	Returned332       int32  `json:"returned_332"`
 	Unauthorized401   int32  `json:"unauthorized_401"`
 	Forbidden403      int32  `json:"forbidden_403"`
 	RateLimited429    int32  `json:"rate_limited_429"`
@@ -204,6 +203,9 @@ func formatAttemptStats(stats probeAttemptStats) string {
 		fmt.Sprintf("本次打票尝试 %d 次", stats.Attempts),
 		fmt.Sprintf("292×%d", stats.Returned292),
 		fmt.Sprintf("312×%d", stats.Returned312),
+	}
+	if stats.Returned332 > 0 {
+		parts = append(parts, fmt.Sprintf("332×%d", stats.Returned332))
 	}
 	if stats.Unauthorized401 > 0 {
 		parts = append(parts, fmt.Sprintf("401×%d", stats.Unauthorized401))
@@ -231,6 +233,7 @@ func ticketAcquireResult(event ticketActivity, force bool, stats probeAttemptSta
 		Success: true, Result: event.Result, Account: event.Account, Model: event.Model,
 		ExpiresAt: event.ExpiresAt, SecondsLeft: event.SecondsLeft, Message: event.Message, Forced: force,
 		Attempts: stats.Attempts, Returned292: stats.Returned292, Returned312: stats.Returned312,
+		Returned332:     stats.Returned332,
 		Unauthorized401: stats.Unauthorized401, Forbidden403: stats.Forbidden403,
 		RateLimited429: stats.RateLimited429, OtherHTTP: stats.OtherHTTP,
 		MissingTurnState: stats.MissingTurnState, TransportFailures: stats.TransportFailures,
@@ -282,7 +285,7 @@ func handleTicketAcquireResource(q url.Values) pluginapi.ManagementResponse {
 		message := demandAcquireErrorMessage(err) + "；" + summary
 		recordTicketActivity("manual", "failed", account, model, message, "")
 		if errors.Is(err, errTicketAttemptLimit) {
-			return managementError(http.StatusServiceUnavailable, fmt.Sprintf("打票失败：已达到本次 %d 次上限；%s，未取得 292", cfg.OnDemandMaxAttempts, summary))
+			return managementError(http.StatusServiceUnavailable, fmt.Sprintf("打票失败：已达到本次 %d 次上限；%s，未取得有效票（292/332）", cfg.OnDemandMaxAttempts, summary))
 		}
 		if errors.Is(err, errAccountReauthorizationRequired) {
 			return managementError(http.StatusServiceUnavailable, fmt.Sprintf("打票失败：账号返回 HTTP 401，需要重新授权；%s。重新授权后可用“强制打票”立即验证", summary))
@@ -293,6 +296,6 @@ func handleTicketAcquireResource(q url.Values) pluginapi.ManagementResponse {
 		}
 		return managementError(http.StatusServiceUnavailable, fmt.Sprintf("打票失败：%s", message))
 	}
-	event := recordTicketActivity("manual", "acquired", account, model, "成功取得并保存 292 票；"+summary, value)
+	event := recordTicketActivity("manual", "acquired", account, model, fmt.Sprintf("成功取得并保存 %d 票；%s", len(value), summary), value)
 	return jsonResponse(http.StatusOK, ticketAcquireResult(event, force, stats))
 }

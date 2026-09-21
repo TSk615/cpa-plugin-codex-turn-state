@@ -224,6 +224,7 @@ type probeCredential struct {
 	accessToken string
 	accountID   string
 	proxyURL    string
+	planType    string
 	expiresAt   time.Time
 }
 
@@ -596,7 +597,7 @@ func probeHarvestBucket(ctx context.Context, cfg pluginConfig, pool *probeClient
 			continue
 		}
 		probeRecordAttemptResponse(ctx, status, value)
-		switch probeConsume(cfg, cred.name, short, model, status, value, exit) {
+		switch probeConsume(cfg, cred.name, short, model, status, value, exit, cred.planType) {
 		case probeOutcomeStored:
 			return true
 		case probeOutcomeAccountLimited:
@@ -673,7 +674,7 @@ func probeHarvestRotating(ctx context.Context, cfg pluginConfig, pool *probeClie
 			continue
 		}
 		probeRecordAttemptResponse(ctx, status, value)
-		switch probeConsume(cfg, cred.name, short, model, status, value, exit) {
+		switch probeConsume(cfg, cred.name, short, model, status, value, exit, cred.planType) {
 		case probeOutcomeStored:
 			probeCooldownSet(probeRotatingExit, cred.name, model, time.Now().Add(probeExitCooldown))
 			return true, fired
@@ -702,7 +703,11 @@ func probeHarvestRotating(ctx context.Context, cfg pluginConfig, pool *probeClie
 // It reports whether a template was stored, which is what tells the caller to
 // stop walking the pool: anything else means this exit did not work out and the
 // next one deserves a turn.
-func probeConsume(cfg pluginConfig, name, short, model string, status int, value, exit string) probeOutcome {
+func probeConsume(cfg pluginConfig, name, short, model string, status int, value, exit string, planTypes ...string) probeOutcome {
+	plan := ""
+	if len(planTypes) > 0 {
+		plan = planTypes[0]
+	}
 	switch status {
 	case http.StatusTooManyRequests:
 		// The credential is being told to slow down. Every remaining exit would
@@ -728,8 +733,8 @@ func probeConsume(cfg pluginConfig, name, short, model string, status int, value
 		return probeOutcomeTryNext
 	}
 	switch {
-	case len(value) == cfg.TemplateLength:
-		if errStore := probeStore(cfg, name, model, value); errStore != nil {
+	case isAccountTemplateLength(len(value), cfg.TemplateLength, plan):
+		if errStore := probeStore(cfg, name, model, value, plan); errStore != nil {
 			probeRunLog("%s %s: harvested len=%d but store failed: %s", short, model, len(value), probeRedact(errStore.Error()))
 			return probeOutcomeTryNext
 		}
@@ -750,7 +755,14 @@ func probeConsume(cfg pluginConfig, name, short, model string, status int, value
 // request hook reads out of selected_auth_id and feeds to bucketKey -- storing
 // under anything else would silently break every substitution. Attribution is
 // "observed": we held the token, so the account is certain, not inferred.
-func probeStore(cfg pluginConfig, name, model, value string) error {
+func probeStore(cfg pluginConfig, name, model, value string, planTypes ...string) error {
+	plan := ""
+	if len(planTypes) > 0 {
+		plan = planTypes[0]
+	}
+	if !isAccountTemplateLength(len(value), cfg.TemplateLength, plan) {
+		return fmt.Errorf("ticket length does not match credential plan")
+	}
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if state.config.OnDemand && !cfg.OnDemand {
@@ -761,7 +773,7 @@ func probeStore(cfg pluginConfig, name, model, value string) error {
 	}
 	now := time.Now()
 	if cfg.OnDemand && !demandTicketValid(cfg, value, now) {
-		return fmt.Errorf("ticket is not a valid unexpired 292")
+		return fmt.Errorf("ticket is not a valid unexpired 292/332")
 	}
 	issued, ok := fernetIssuedAt(value)
 	if !ok {
@@ -775,6 +787,7 @@ func probeStore(cfg pluginConfig, name, model, value string) error {
 		IssuedAt:    issued.UTC().Format(time.RFC3339),
 		HarvestedAt: now.UTC().Format(time.RFC3339),
 		Attribution: attributionObserved,
+		PlanType:    plan,
 	}
 	if errWrite := writeStoreRecord(cfg.StoreDir, record, cfg.TemplateLength); errWrite != nil {
 		return errWrite
@@ -1090,6 +1103,7 @@ type probeAttemptBudget struct {
 	max               int32
 	returned292       atomic.Int32
 	returned312       atomic.Int32
+	returned332       atomic.Int32
 	unauthorized401   atomic.Int32
 	forbidden403      atomic.Int32
 	rateLimited429    atomic.Int32
@@ -1102,6 +1116,7 @@ type probeAttemptStats struct {
 	Attempts          int32
 	Returned292       int32
 	Returned312       int32
+	Returned332       int32
 	Unauthorized401   int32
 	Forbidden403      int32
 	RateLimited429    int32
@@ -1130,6 +1145,7 @@ func (b *probeAttemptBudget) stats() probeAttemptStats {
 	}
 	return probeAttemptStats{
 		Attempts: b.count.Load(), Returned292: b.returned292.Load(), Returned312: b.returned312.Load(),
+		Returned332:     b.returned332.Load(),
 		Unauthorized401: b.unauthorized401.Load(), Forbidden403: b.forbidden403.Load(),
 		RateLimited429: b.rateLimited429.Load(), OtherHTTP: b.otherHTTP.Load(),
 		MissingTurnState: b.missingTurnState.Load(), TransportFailures: b.transportFailures.Load(),
@@ -1193,6 +1209,8 @@ func probeRecordAttemptResponse(ctx context.Context, status int, value string) {
 			budget.returned292.Add(1)
 		case 312:
 			budget.returned312.Add(1)
+		case 332:
+			budget.returned332.Add(1)
 		case 0:
 			budget.missingTurnState.Add(1)
 		default:
@@ -1439,6 +1457,7 @@ func probeParseCredential(name string, blob map[string]any) (probeCredential, er
 		accessToken: token,
 		accountID:   probeAccountID(claims, blob),
 		proxyURL:    strings.TrimSpace(stringField(blob, "proxy_url")),
+		planType:    credentialPlanType(claims, blob),
 	}
 	if exp, ok := probeTokenExpiry(claims); ok {
 		cred.expiresAt = exp

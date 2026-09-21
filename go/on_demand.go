@@ -104,7 +104,7 @@ func demandModel(model string) string {
 
 func demandTicketValid(cfg pluginConfig, value string, now time.Time) bool {
 	issued, ok := fernetIssuedAt(value)
-	return len(value) == 292 && ok && !issued.After(now) && now.Add(demandExpiryMargin).Before(issued.Add(cfg.ttl()))
+	return isTemplateLength(len(value), 292) && ok && !issued.After(now) && now.Add(demandExpiryMargin).Before(issued.Add(cfg.ttl()))
 }
 
 func demandReject(status int, code, message string) ([]byte, error) {
@@ -170,7 +170,7 @@ func interceptOnDemand(req pluginapi.RequestInterceptRequest, cfg pluginConfig) 
 		message := demandAcquireErrorMessage(acquireErr) + "；" + outcomes
 		recordTicketActivity("request", "failed", account, model, message, "")
 		if errors.Is(acquireErr, context.DeadlineExceeded) || ctx.Err() != nil {
-			return demandReject(504, "turn_state_timeout", "Timed out waiting for a valid 292 ticket; "+outcomes+"; business request was not sent.")
+			return demandReject(504, "turn_state_timeout", "Timed out waiting for a valid 292/332 ticket; "+outcomes+"; business request was not sent.")
 		}
 		if errors.Is(acquireErr, errAccountReauthorizationRequired) {
 			return demandReject(503, "turn_state_reauthorization_required", "The selected account returned HTTP 401 and needs reauthorization; business request was not sent.")
@@ -179,7 +179,7 @@ func interceptOnDemand(req pluginapi.RequestInterceptRequest, cfg pluginConfig) 
 		if errors.As(acquireErr, &cooldownErr) {
 			return demandReject(503, "turn_state_account_cooldown", fmt.Sprintf("The selected account is cooling down after an upstream refusal (%d seconds left); business request was not sent. An operator may use Manual Ticket > Force Ticket to retry once during cooldown.", cooldownErr.Status.SecondsLeft))
 		}
-		return demandReject(503, "turn_state_unavailable", "No valid 292 ticket for the selected account and model; "+outcomes+"; business request was not sent.")
+		return demandReject(503, "turn_state_unavailable", "No valid 292/332 ticket for the selected account and model; "+outcomes+"; business request was not sent.")
 	}
 	state.mu.Lock()
 	current := reflect.DeepEqual(cfg, state.config)
@@ -188,9 +188,9 @@ func interceptOnDemand(req pluginapi.RequestInterceptRequest, cfg pluginConfig) 
 		recordTicketActivity("request", "failed", account, model, "票已过期或配置在等待期间发生变化", "")
 		return demandReject(503, "turn_state_changed", "Ticket expired or configuration changed while waiting; retry the request.")
 	}
-	result, message := "acquired", "缺票，成功取得并注入 292 票；"+outcomes
+	result, message := "acquired", fmt.Sprintf("缺票，成功取得并注入 %d 票；%s", len(value), outcomes)
 	if hadTicket {
-		result, message = "reused", "沿用未过期的 292 票并放行；"+outcomes
+		result, message = "reused", fmt.Sprintf("沿用未过期的 %d 票并放行；%s", len(value), outcomes)
 	}
 	recordTicketActivityForRequest("request", result, account, model, message, value, req.RequestID, ticketLengthLabelFor(value, cfg.TemplateLength, cfg.ReplaceLength))
 	logDecision("inject", account, model, len(headerValue(req.Headers, turnStateHeader)), "on-demand: valid account/model ticket")
@@ -223,7 +223,7 @@ var refresh312Work = struct {
 }{next: make(map[string]time.Time)}
 
 // scheduleRefreshAfter312 reacts only to an explicit upstream 312 after this
-// plugin injected a 292. One account/model can schedule at most one refresh per
+// plugin injected a 292 or 332. One account/model can schedule at most one refresh per
 // configured cooldown window; a burst of business responses therefore creates
 // one acquisition flight, not one flight per response.
 func scheduleRefreshAfter312(account, model string) {
@@ -254,7 +254,7 @@ func scheduleRefreshAfter312(account, model string) {
 		recordTicketActivity("refresh", "failed", account, model, "响应返回 312，但旧票失效处理失败："+probeRedact(err.Error()), "")
 		return
 	}
-	logDecision("refresh", account, model, cfg.ReplaceLength, "response 312 invalidated cached 292; scheduling one acquisition")
+	logDecision("refresh", account, model, cfg.ReplaceLength, "response 312 invalidated cached ticket; scheduling one acquisition")
 	go func() {
 		timeout := time.Duration(cfg.OnDemandTimeoutSeconds) * time.Second
 		if timeout <= 0 || timeout > ticketAcquireMaxWait {
@@ -270,7 +270,7 @@ func scheduleRefreshAfter312(account, model string) {
 			return
 		}
 		recordTicketActivity("refresh", "acquired", account, model,
-			"业务响应返回 312，已重新取得并保存 292；"+summary, value)
+			fmt.Sprintf("业务响应返回 312，已重新取得并保存 %d；%s", len(value), summary), value)
 	}()
 }
 
@@ -446,16 +446,16 @@ func demandAcquire(ctx context.Context, cfg pluginConfig, account, model string,
 
 func demandAcquireErrorMessage(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return "等待有效 292 票超时"
+		return "等待有效票（292/332）超时"
 	}
 	if errors.Is(err, errTicketAttemptLimit) {
-		return "已达到本次打票次数上限，仍未取得 292 票"
+		return "已达到本次打票次数上限，仍未取得有效票（292/332）"
 	}
 	if errors.Is(err, errAccountReauthorizationRequired) {
 		return "账号返回 HTTP 401，需要重新授权"
 	}
 	if errors.Is(err, errNoValidTicket) {
-		return "没有取得有效 292 票"
+		return "没有取得有效票（292/332）"
 	}
 	var cooldownErr *probeAccountCooldownError
 	if errors.As(err, &cooldownErr) {
