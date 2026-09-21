@@ -800,7 +800,7 @@ func probeStore(cfg pluginConfig, name, model, value string, planTypes ...string
 		// a stale index is a monitoring gap, not a lost harvest. Log and keep it.
 		log.Printf("%sprobe index write failed: %v", logPrefix, errIndex)
 	}
-	state.buckets[bucketKey(name, model)] = templateEntry{value: value, issuedAt: issued}
+	state.buckets[bucketKey(name, model)] = templateEntry{value: value, issuedAt: issued, planType: plan}
 	return nil
 }
 
@@ -1452,12 +1452,16 @@ func probeParseCredential(name string, blob map[string]any) (probeCredential, er
 		return probeCredential{}, fmt.Errorf("no access_token in credential file")
 	}
 	claims := probeJWTClaims(token)
+	planType := credentialPlanType(claims, blob)
+	if planType == "" {
+		planType = "unknown"
+	}
 	cred := probeCredential{
 		name:        name,
 		accessToken: token,
 		accountID:   probeAccountID(claims, blob),
 		proxyURL:    strings.TrimSpace(stringField(blob, "proxy_url")),
-		planType:    credentialPlanType(claims, blob),
+		planType:    planType,
 	}
 	if exp, ok := probeTokenExpiry(claims); ok {
 		cred.expiresAt = exp

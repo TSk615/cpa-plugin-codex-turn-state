@@ -134,6 +134,28 @@ func TestTeam332DefaultStoreLoadsAndDemandReusesIt(t *testing.T) {
 	}
 }
 
+func TestPlanlessLegacyTicketIsReacquiredBeforeBusiness(t *testing.T) {
+	var calls atomic.Int32
+	issued := time.Now().Add(-time.Minute).UTC().Truncate(time.Second)
+	fresh := fakeTokenSeed(292, time.Now().Add(-time.Second), 0x71)
+	cfg := planDemandSetup(t, func(w http.ResponseWriter, _ *http.Request) {
+		calls.Add(1)
+		w.Header().Set(turnStateHeader, fresh)
+	}, "plus", "plus")
+	legacy := storeRecord{
+		AuthID: probeTestAccount, Model: "model-a", Len: 292,
+		Value: fakeTokenSeed(292, issued, 0x17), IssuedAt: issued.Format(time.RFC3339), HarvestedAt: issued.Format(time.RFC3339),
+	}
+	writeRawRecord(t, cfg.StoreDir, legacy)
+	if err := writeStoreIndex(cfg.StoreDir, time.Now(), cfg.ttl(), cfg.TemplateLength); err != nil {
+		t.Fatal(err)
+	}
+	resp := interceptAfter(t, demandRequest(legacy.AuthID, legacy.Model))
+	if resp.Terminate || outgoingHeader(resp) != fresh || calls.Load() != 1 {
+		t.Fatal("planless legacy ticket was replayed instead of reacquired")
+	}
+}
+
 func TestTeam332OnDemandRejectsExpiredFutureAnd312(t *testing.T) {
 	cases := []struct {
 		name  string

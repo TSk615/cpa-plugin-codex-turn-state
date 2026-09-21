@@ -308,7 +308,12 @@ func demandCached(cfg pluginConfig, account, model string) string {
 	now := time.Now()
 	state.refreshStoreLocked(cfg, now)
 	entry, found := state.freshestTemplateLocked(account, model, now, cfg.ttl())
-	if found && demandTicketValid(cfg, entry.value, now) {
+	// Records written before plan-aware ticket lengths have no plan_type. Do
+	// not guess: forcing one re-acquisition is safer than replaying a Plus 292
+	// as Team, or a Team ticket as Plus. The new record persists the plan.
+	if found && strings.TrimSpace(entry.planType) != "" &&
+		isAccountTemplateLength(len(entry.value), cfg.TemplateLength, entry.planType) &&
+		demandTicketValid(cfg, entry.value, now) {
 		return entry.value
 	}
 	return ""

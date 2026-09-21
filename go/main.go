@@ -229,7 +229,8 @@ type pluginState struct {
 
 // templateEntry is one harvested template, scoped to a single bucket.
 type templateEntry struct {
-	value string
+	value    string
+	planType string
 	// issuedAt is the token's own issuance time, decoded from the embedded
 	// Fernet timestamp, or the harvest time when the value is not a decodable
 	// Fernet token. Expiry is keyed on this rather than on when the proxy
@@ -1175,7 +1176,7 @@ func interceptAfterAuth(raw []byte) ([]byte, error) {
 			issued = now
 		}
 		if templateUsable(issued, now, ttl) {
-			state.buckets[bucketKey(authID, model)] = templateEntry{value: value, issuedAt: issued}
+			state.buckets[bucketKey(authID, model)] = templateEntry{value: value, issuedAt: issued, planType: requestPlan}
 			harvestedOK = true
 		}
 	}
@@ -1505,7 +1506,7 @@ func harvestFromResponse(cfg pluginConfig, headers http.Header, metadata map[str
 	}
 
 	state.mu.Lock()
-	state.buckets[key] = templateEntry{value: value, issuedAt: issued}
+	state.buckets[key] = templateEntry{value: value, issuedAt: issued, planType: plan}
 	state.mu.Unlock()
 	recordTicketActivity("passive", "acquired", authID, model, fmt.Sprintf("从正常业务响应中保存了 %d 票", len(value)), value)
 
@@ -1920,7 +1921,7 @@ func loadStore(dir string, now time.Time, ttl time.Duration, templateLength int)
 		if !recordUsable(rec, issued, now, ttl, templateLength) {
 			continue
 		}
-		out[bucketKey(rec.AuthID, rec.Model)] = templateEntry{value: rec.Value, issuedAt: issued}
+		out[bucketKey(rec.AuthID, rec.Model)] = templateEntry{value: rec.Value, issuedAt: issued, planType: rec.PlanType}
 	}
 	return out, nil
 }

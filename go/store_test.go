@@ -22,6 +22,7 @@ func storeRecordFor(authID, model string, issued time.Time, n int) storeRecord {
 		Value:       fakeToken(n, issued),
 		IssuedAt:    issued.UTC().Format(time.RFC3339),
 		HarvestedAt: issued.UTC().Format(time.RFC3339),
+		PlanType:    "plus",
 	}
 }
 
