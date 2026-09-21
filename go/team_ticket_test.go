@@ -221,6 +221,7 @@ func TestLoadStoreEnforcesTicketLengthFromPlanMetadata(t *testing.T) {
 	}{
 		{"team 332", "team", 332, true},
 		{"business 332", "business", 332, true},
+		{"business prolite 332", "self_serve_business_prolite", 332, true},
 		{"plus 292", "plus", 292, true},
 		{"plus 332", "plus", 332, false},
 		{"unknown 332", "", 332, false},

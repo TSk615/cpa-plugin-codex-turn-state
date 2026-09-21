@@ -15,11 +15,14 @@ func isDefaultTicketLabel(label string) bool {
 }
 
 func isTeamPlan(plan string) bool {
-	switch strings.ToLower(strings.TrimSpace(plan)) {
+	plan = strings.ToLower(strings.TrimSpace(plan))
+	switch plan {
 	case "team", "business":
 		return true
 	}
-	return false
+	// Current Business workspace tokens use values such as
+	// self_serve_business_prolite rather than the short "business" label.
+	return plan == "self_serve_business" || strings.HasPrefix(plan, "self_serve_business_")
 }
 
 func isAccountTemplateLength(length, templateLength int, plan string) bool {
