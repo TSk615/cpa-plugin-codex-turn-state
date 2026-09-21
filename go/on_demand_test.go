@@ -347,6 +347,19 @@ func resetTicketActivitiesForTest(t *testing.T) {
 	})
 }
 
+func resetRefresh312ForTest(t *testing.T) {
+	t.Helper()
+	refresh312Work.Lock()
+	old := refresh312Work.next
+	refresh312Work.next = make(map[string]time.Time)
+	refresh312Work.Unlock()
+	t.Cleanup(func() {
+		refresh312Work.Lock()
+		refresh312Work.next = old
+		refresh312Work.Unlock()
+	})
+}
+
 func TestOnDemandActivitySeparatesRequestAndResponseTicket(t *testing.T) {
 	resetTicketActivitiesForTest(t)
 	cfg := demandSetup(t, func(w http.ResponseWriter, r *http.Request) {
@@ -373,6 +386,85 @@ func TestOnDemandActivitySeparatesRequestAndResponseTicket(t *testing.T) {
 	activity := ticketActivitySnapshot()
 	if len(activity) != 1 || activity[0].RequestTicket != "292" || activity[0].ResponseTicket != "312" {
 		t.Fatalf("request/response ticket labels not recorded: %+v", activity)
+	}
+}
+
+func TestOnDemandActivityExplainsMissingResponseTicketAfter292Replay(t *testing.T) {
+	resetTicketActivitiesForTest(t)
+	cfg := demandSetup(t, func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("a valid cached ticket should not trigger a probe")
+	})
+	rec := storeRecordFor(probeTestAccount, "model-a", time.Now().Add(-time.Minute), 292)
+	mustWriteRecord(t, cfg.StoreDir, rec)
+	req := demandRequest(probeTestAccount, "model-a")
+	req.RequestID = "business-request-no-new-ticket"
+	if resp := interceptAfter(t, req); resp.Terminate || outgoingHeader(resp) != rec.Value {
+		t.Fatal("cached ticket was not injected")
+	}
+	raw, err := json.Marshal(pluginapi.ResponseInterceptRequest{
+		RequestID:       req.RequestID,
+		Model:           "model-a",
+		ResponseHeaders: http.Header{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = handleMethod(pluginabi.MethodResponseInterceptAfter, raw); err != nil {
+		t.Fatal(err)
+	}
+	activity := ticketActivitySnapshot()
+	if len(activity) != 1 || activity[0].RequestTicket != "292" || activity[0].ResponseTicket != "上游未返回票（状态无法确认；下次仍注入请求292）" {
+		t.Fatalf("missing response ticket was not explained: %+v", activity)
+	}
+}
+
+func TestOnDemandResponse312RefreshesOncePerCooldown(t *testing.T) {
+	resetTicketActivitiesForTest(t)
+	resetRefresh312ForTest(t)
+	var calls atomic.Int32
+	cfg := demandSetup(t, func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.Header().Set(turnStateHeader, fakeTokenSeed(292, time.Now().Add(-time.Second), 77))
+	})
+	state.mu.Lock()
+	cfg = state.config
+	cfg.RefreshOn312 = true
+	cfg.RefreshOn312Cooldown = 600
+	swapConfigLocked(cfg)
+	state.mu.Unlock()
+
+	old := storeRecordFor(probeTestAccount, "model-a", time.Now().Add(-time.Minute), 292)
+	mustWriteRecord(t, cfg.StoreDir, old)
+	for i := 1; i <= 2; i++ {
+		req := demandRequest(probeTestAccount, "model-a")
+		req.RequestID = fmt.Sprintf("business-312-%d", i)
+		if resp := interceptAfter(t, req); resp.Terminate || len(outgoingHeader(resp)) != 292 {
+			t.Fatal("cached ticket was not injected")
+		}
+		raw, err := json.Marshal(pluginapi.ResponseInterceptRequest{
+			RequestID:       req.RequestID,
+			Model:           "model-a",
+			ResponseHeaders: http.Header{turnStateHeader: {fakeToken(312, time.Now())}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = handleMethod(pluginabi.MethodResponseInterceptAfter, raw); err != nil {
+			t.Fatal(err)
+		}
+		if i == 1 {
+			deadline := time.Now().Add(2 * time.Second)
+			for calls.Load() < 1 && time.Now().Before(deadline) {
+				time.Sleep(10 * time.Millisecond)
+			}
+			if calls.Load() != 1 || demandCached(cfg, probeTestAccount, "model-a") == "" {
+				t.Fatalf("312 did not trigger one successful refresh: calls=%d", calls.Load())
+			}
+		}
+	}
+	time.Sleep(50 * time.Millisecond)
+	if calls.Load() != 1 {
+		t.Fatalf("cooldown allowed duplicate 312 refreshes: calls=%d", calls.Load())
 	}
 }
 

@@ -269,6 +269,8 @@ type pluginConfig struct {
 	OnDemandModels         []string `yaml:"on_demand_models"`
 	OnDemandMaxAttempts    int      `yaml:"on_demand_max_attempts"`
 	OnDemandTimeoutSeconds int      `yaml:"on_demand_timeout_seconds"`
+	RefreshOn312           bool     `yaml:"refresh_on_312"`
+	RefreshOn312Cooldown   int      `yaml:"refresh_on_312_cooldown_seconds"`
 	// Role is "probe" or "business". Empty means "business": that is the role
 	// that neither writes the store nor harvests, so a plugin deployed before
 	// its config is updated does nothing rather than something surprising.
@@ -378,6 +380,8 @@ func defaultConfig() pluginConfig {
 		ProbeBaseURL:           defaultProbeBaseURL,
 		OnDemandMaxAttempts:    int(defaultTicketAcquireMaxAttempts),
 		OnDemandTimeoutSeconds: 90,
+		RefreshOn312:           false,
+		RefreshOn312Cooldown:   600,
 	}
 }
 
@@ -732,6 +736,12 @@ func configure(raw []byte) error {
 		if ov.OnDemandTimeoutSeconds != nil {
 			cfg.OnDemandTimeoutSeconds = *ov.OnDemandTimeoutSeconds
 		}
+		if ov.RefreshOn312 != nil {
+			cfg.RefreshOn312 = *ov.RefreshOn312
+		}
+		if ov.RefreshOn312Cooldown != nil {
+			cfg.RefreshOn312Cooldown = *ov.RefreshOn312Cooldown
+		}
 	}
 
 	// An empty role means business: the half that neither writes nor harvests.
@@ -752,6 +762,9 @@ func configure(raw []byte) error {
 	}
 	if cfg.OnDemandTimeoutSeconds < 1 || cfg.OnDemandTimeoutSeconds > 90 {
 		return fmt.Errorf("on_demand_timeout_seconds must be between 1 and 90")
+	}
+	if cfg.RefreshOn312Cooldown < 60 || cfg.RefreshOn312Cooldown > 3600 {
+		return fmt.Errorf("refresh_on_312_cooldown_seconds must be between 60 and 3600")
 	}
 	cfg.StoreDir = strings.TrimSpace(cfg.StoreDir)
 	// Trimmed for the same reason store_dir is: a YAML value that picked up a
@@ -982,6 +995,8 @@ func pluginRegistration() registration {
 				{Name: "on_demand_models", Type: pluginapi.ConfigFieldTypeArray, Description: "按需模式的模型白名单。名单外模型不等待、不打票、不注入；留空兼容旧配置，表示全部模型。"},
 				{Name: "on_demand_max_attempts", Type: pluginapi.ConfigFieldTypeInteger, Description: "单次业务请求或手动打票最多请求上游的次数。默认 10，范围 1–50。"},
 				{Name: "on_demand_timeout_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "按需打票兜底等待时间，包含排队、读取凭证和代理重试。默认 90 秒，范围 1–90 秒。"},
+				{Name: "refresh_on_312", Type: pluginapi.ConfigFieldTypeBoolean, Description: "默认关闭。开启后，业务请求注入 292 却明确收到 312 时，使旧票失效并异步重新打票。"},
+				{Name: "refresh_on_312_cooldown_seconds", Type: pluginapi.ConfigFieldTypeInteger, Description: "同一账号和模型因响应 312 触发自动刷新的最短间隔。默认 600 秒，范围 60–3600 秒。"},
 				{
 					Name:        "role",
 					Type:        pluginapi.ConfigFieldTypeEnum,
@@ -1719,6 +1734,8 @@ type runtimeOverride struct {
 	OnDemandModels         *[]string `json:"on_demand_models,omitempty"`
 	OnDemandMaxAttempts    *int      `json:"on_demand_max_attempts,omitempty"`
 	OnDemandTimeoutSeconds *int      `json:"on_demand_timeout_seconds,omitempty"`
+	RefreshOn312           *bool     `json:"refresh_on_312,omitempty"`
+	RefreshOn312Cooldown   *int      `json:"refresh_on_312_cooldown_seconds,omitempty"`
 }
 
 // readRuntimeOverride loads the dashboard override from dir. A missing file is the
@@ -1741,7 +1758,8 @@ func readRuntimeOverride(dir string) (runtimeOverride, bool) {
 		return runtimeOverride{}, false
 	}
 	if ov.Role == nil && ov.DryRun == nil && ov.OnDemand == nil &&
-		ov.OnDemandAccounts == nil && ov.OnDemandModels == nil && ov.OnDemandMaxAttempts == nil && ov.OnDemandTimeoutSeconds == nil {
+		ov.OnDemandAccounts == nil && ov.OnDemandModels == nil && ov.OnDemandMaxAttempts == nil && ov.OnDemandTimeoutSeconds == nil &&
+		ov.RefreshOn312 == nil && ov.RefreshOn312Cooldown == nil {
 		return runtimeOverride{}, false
 	}
 	return ov, true
@@ -1757,12 +1775,14 @@ func writeRuntimeOverride(dir string, cfg pluginConfig) error {
 	}
 	role, dryRun := cfg.Role, cfg.DryRun
 	onDemand, maxAttempts, timeout := cfg.OnDemand, cfg.OnDemandMaxAttempts, cfg.OnDemandTimeoutSeconds
+	refreshOn312, refreshCooldown := cfg.RefreshOn312, cfg.RefreshOn312Cooldown
 	accounts := append([]string(nil), cfg.OnDemandAccounts...)
 	models := append([]string(nil), cfg.OnDemandModels...)
 	ov := runtimeOverride{
 		Role: &role, DryRun: &dryRun,
 		OnDemand: &onDemand, OnDemandAccounts: &accounts, OnDemandModels: &models,
 		OnDemandMaxAttempts: &maxAttempts, OnDemandTimeoutSeconds: &timeout,
+		RefreshOn312: &refreshOn312, RefreshOn312Cooldown: &refreshCooldown,
 	}
 	data, errMarshal := json.MarshalIndent(ov, "", "  ")
 	if errMarshal != nil {

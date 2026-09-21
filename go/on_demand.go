@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
@@ -214,6 +216,88 @@ var demandWork = struct {
 	accounts map[string]*demandAccountGate
 	slots    chan struct{}
 }{flights: make(map[string]*demandFlight), accounts: make(map[string]*demandAccountGate), slots: make(chan struct{}, probeMaxAccountsInFlight)}
+
+var refresh312Work = struct {
+	sync.Mutex
+	next map[string]time.Time
+}{next: make(map[string]time.Time)}
+
+// scheduleRefreshAfter312 reacts only to an explicit upstream 312 after this
+// plugin injected a 292. One account/model can schedule at most one refresh per
+// configured cooldown window; a burst of business responses therefore creates
+// one acquisition flight, not one flight per response.
+func scheduleRefreshAfter312(account, model string) {
+	account = strings.TrimSpace(account)
+	model = demandModel(model)
+	if account == "" || model == "" {
+		return
+	}
+	state.mu.Lock()
+	cfg := state.config
+	state.mu.Unlock()
+	if !cfg.OnDemand || !cfg.RefreshOn312 || !demandSelected(cfg, account) || !demandModelSelected(cfg, model) {
+		return
+	}
+	now := time.Now()
+	key := bucketKey(account, model)
+	refresh312Work.Lock()
+	if until := refresh312Work.next[key]; until.After(now) {
+		refresh312Work.Unlock()
+		logDecision("refresh-skip", account, model, cfg.ReplaceLength,
+			fmt.Sprintf("response 312 refresh cooldown, %d seconds left", int64(until.Sub(now).Seconds())+1))
+		return
+	}
+	refresh312Work.next[key] = now.Add(time.Duration(cfg.RefreshOn312Cooldown) * time.Second)
+	refresh312Work.Unlock()
+
+	if err := invalidateDemandTicket(cfg, account, model); err != nil {
+		recordTicketActivity("refresh", "failed", account, model, "响应返回 312，但旧票失效处理失败："+probeRedact(err.Error()), "")
+		return
+	}
+	logDecision("refresh", account, model, cfg.ReplaceLength, "response 312 invalidated cached 292; scheduling one acquisition")
+	go func() {
+		timeout := time.Duration(cfg.OnDemandTimeoutSeconds) * time.Second
+		if timeout <= 0 || timeout > ticketAcquireMaxWait {
+			timeout = ticketAcquireMaxWait
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		value, stats, err := demandEnsure(ctx, cfg, account, model, false)
+		summary := formatAttemptStats(stats)
+		if err != nil {
+			recordTicketActivity("refresh", "failed", account, model,
+				"业务响应返回 312，自动刷新失败："+demandAcquireErrorMessage(err)+"；"+summary, "")
+			return
+		}
+		recordTicketActivity("refresh", "acquired", account, model,
+			"业务响应返回 312，已重新取得并保存 292；"+summary, value)
+	}()
+}
+
+func invalidateDemandTicket(cfg pluginConfig, account, model string) error {
+	rel, err := bucketRelPath(account, model)
+	if err != nil {
+		return err
+	}
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if !reflect.DeepEqual(cfg, state.config) {
+		return fmt.Errorf("configuration changed before 312 refresh")
+	}
+	err = os.Remove(filepath.Join(cfg.StoreDir, rel))
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	key := bucketKey(account, model)
+	delete(state.buckets, key)
+	delete(state.store, key)
+	state.storeMod = time.Time{}
+	state.storeChecked = time.Time{}
+	if errIndex := writeStoreIndex(cfg.StoreDir, time.Now(), cfg.ttl(), cfg.TemplateLength); errIndex != nil {
+		return fmt.Errorf("ticket removed but index rewrite failed: %w", errIndex)
+	}
+	return nil
+}
 
 func demandCached(cfg pluginConfig, account, model string) string {
 	state.mu.Lock()

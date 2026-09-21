@@ -27,6 +27,7 @@ type ticketActivity struct {
 	ExpiresAt      string `json:"expires_at,omitempty"`
 	SecondsLeft    int64  `json:"seconds_left,omitempty"`
 	RequestID      string `json:"-"`
+	AuthID         string `json:"-"`
 }
 
 var ticketActivities = struct {
@@ -51,6 +52,7 @@ func recordTicketActivityForRequest(kind, result, account, model, message, value
 		Message:       message,
 		RequestTicket: requestTicket,
 		RequestID:     requestID,
+		AuthID:        account,
 	}
 	if issued, ok := fernetIssuedAt(value); ok {
 		expires := issued.Add(time.Duration(currentTTLSeconds()) * time.Second)
@@ -88,23 +90,42 @@ func observeTicketResponse(requestID string, headers http.Header, model string, 
 	value := headerValue(headers, turnStateHeader)
 	responseTicket := ticketLengthLabelFor(value, templateLength, replaceLength)
 	var account string
+	var authID string
+	var requestTicket string
+	var activityModel string
 	var matched bool
 	ticketActivities.Lock()
 	for i := range ticketActivities.items {
 		if ticketActivities.items[i].RequestID != requestID {
 			continue
 		}
+		// Codex turn-state is a per-turn sticky-routing token. After the first
+		// response issues it, successful continuation responses commonly omit the
+		// header; the client keeps replaying the existing value unchanged. Make
+		// that distinct from a headerless request that never carried a ticket.
+		if len(value) == 0 && ticketActivities.items[i].RequestTicket == "292" {
+			responseTicket = "上游未返回票（状态无法确认；下次仍注入请求292）"
+		}
 		ticketActivities.items[i].ResponseTicket = responseTicket
 		if strings.TrimSpace(model) != "" && ticketActivities.items[i].Model == "" {
 			ticketActivities.items[i].Model = model
 		}
 		account = ticketActivities.items[i].Account
+		authID = ticketActivities.items[i].AuthID
+		requestTicket = ticketActivities.items[i].RequestTicket
+		activityModel = ticketActivities.items[i].Model
 		matched = true
 		break
 	}
 	ticketActivities.Unlock()
 	if matched {
 		logDecision("response", account, model, len(value), "业务响应票="+responseTicket)
+		if len(value) == replaceLength && requestTicket == "292" {
+			if strings.TrimSpace(model) == "" {
+				model = activityModel
+			}
+			scheduleRefreshAfter312(authID, model)
+		}
 	}
 }
 

@@ -537,10 +537,26 @@ select {
             <label for="demandTimeout">超过这个时间仍未拿到票，请求会失败</label>
             <input id="demandTimeout" type="number" min="1" max="90" step="1" value="90">
           </div>
+          <div class="field">
+            <div class="step-label"><span class="step-num">5</span><span>响应 312 后自动刷新</span></div>
+            <div class="switchline">
+              <span>旧票失效并异步重新打票</span>
+              <label class="switch" title="开启或关闭 312 后自动刷新">
+                <input id="refreshOn312" type="checkbox">
+                <span></span>
+              </label>
+            </div>
+          </div>
+          <div class="field">
+            <div class="step-label"><span class="step-num">6</span><span>设置刷新冷却时间</span></div>
+            <label for="refreshOn312Cooldown">同一账号和模型最短触发间隔（秒）</label>
+            <input id="refreshOn312Cooldown" type="number" min="60" max="3600" step="60" value="600">
+          </div>
           <div class="behavior-box">
             <div class="behavior-title">开启后的实际行为</div>
             <div class="behavior-line"><i>✓</i><span>有有效票：立即放行，不重复获取</span></div>
             <div class="behavior-line"><i>✓</i><span>没有业务：保持安静，不主动获取</span></div>
+            <div class="behavior-line"><i>✓</i><span>响应 312：按开关和冷却时间最多触发一次异步刷新</span></div>
             <div class="behavior-line warn"><i>!</i><span>WebSocket：当前版本会拒绝，请使用 HTTP/SSE</span></div>
           </div>
         </div>
@@ -945,6 +961,7 @@ function renderBadges(d) {
   badge("按需打票", d.on_demand ? "已开启：缺票等待，失败拒绝" : "关闭（原有行为）");
   if (d.on_demand) {
     badge("单次打票", (Number(d.on_demand_max_attempts) || 10) + " 次 / " + d.on_demand_timeout_seconds + "s 兜底");
+    badge("响应312刷新", d.refresh_on_312 ? ("开启 / " + (Number(d.refresh_on_312_cooldown_seconds) || 600) + "s 冷却") : "关闭");
   }
   // dry_run=true 是安全态（只打日志不改流量），false 才是在动真流量 —— 所以
   // OFF 用告警色，别让人扫一眼以为「绿灯=没事」。
@@ -1176,6 +1193,8 @@ var demand = {
   enabled: false,
   maxAttempts: 10,
   timeout: 90,
+  refreshOn312: false,
+  refreshCooldown: 600,
   selected: Object.create(null),
   models: Object.create(null),
   dirty: false,
@@ -1449,6 +1468,8 @@ function syncDemand(d) {
   demand.enabled = !!d.on_demand;
   demand.maxAttempts = Number(d.on_demand_max_attempts) || 10;
   demand.timeout = Number(d.on_demand_timeout_seconds) || 90;
+  demand.refreshOn312 = !!d.refresh_on_312;
+  demand.refreshCooldown = Number(d.refresh_on_312_cooldown_seconds) || 600;
   var selected = Object.create(null);
   strList(d.on_demand_accounts).forEach(function (name) { selected[name] = true; });
   if (!hasField(d, "on_demand_accounts") && usingChoices()) {
@@ -1490,6 +1511,10 @@ function renderDemand(d) {
   if (document.activeElement !== timeout) { timeout.value = String(demand.timeout); }
   var attempts = $("demandAttempts");
   if (document.activeElement !== attempts) { attempts.value = String(demand.maxAttempts); }
+  var refreshEnabled = $("refreshOn312");
+  if (document.activeElement !== refreshEnabled) { refreshEnabled.checked = demand.refreshOn312; }
+  var refreshCooldown = $("refreshOn312Cooldown");
+  if (document.activeElement !== refreshCooldown) { refreshCooldown.value = String(demand.refreshCooldown); }
   $("demandStateText").textContent = demand.enabled ? "已开启" : "已关闭";
   var accounts = enabledAccountItems();
   var models = ticketModelItems();
@@ -1561,6 +1586,8 @@ function renderManualControls(d) {
 }
 
 function activityTitle(a) {
+	if (a.kind === "refresh" && a.result === "acquired") { return "响应 312 后刷新成功"; }
+	if (a.kind === "refresh") { return "响应 312 后刷新失败"; }
   if (a.kind === "manual" && a.result === "acquired") { return "主动打票成功"; }
   if (a.kind === "manual" && a.result === "reused") { return "已有有效票"; }
   if (a.kind === "manual") { return "主动打票失败"; }
@@ -2435,12 +2462,18 @@ function doSaveDemand() {
   var maxAttempts = Number($("demandAttempts").value);
   var timeout = Number($("demandTimeout").value);
   var enabled = $("demandEnabled").checked;
+  var refreshOn312 = $("refreshOn312").checked;
+  var refreshCooldown = Number($("refreshOn312Cooldown").value);
   if (!Number.isInteger(maxAttempts) || maxAttempts < 1 || maxAttempts > 50) {
     notify("err", "最多尝试次数必须是 1–50 的整数。");
     return;
   }
   if (!Number.isInteger(timeout) || timeout < 1 || timeout > 90) {
     notify("err", "兜底等待时间必须是 1–90 秒的整数。");
+    return;
+  }
+  if (!Number.isInteger(refreshCooldown) || refreshCooldown < 60 || refreshCooldown > 3600) {
+    notify("err", "312 自动刷新冷却时间必须是 60–3600 秒的整数。");
     return;
   }
   if (enabled && !accounts.length) {
@@ -2453,7 +2486,8 @@ function doSaveDemand() {
   }
   var lines = [
     { text: "状态：" + (d.on_demand ? "已开启" : "已关闭") + " → " + (enabled ? "开启" : "关闭") },
-    { text: "账号：" + accounts.length + " 个；模型：" + models.length + " 个；最多尝试 " + maxAttempts + " 次，" + timeout + " 秒兜底。" }
+    { text: "账号：" + accounts.length + " 个；模型：" + models.length + " 个；最多尝试 " + maxAttempts + " 次，" + timeout + " 秒兜底。" },
+    { text: "响应 312 自动刷新：" + (refreshOn312 ? ("开启，同账号和模型 " + refreshCooldown + " 秒内最多一次") : "关闭") }
   ];
   if (enabled) {
     lines.push({ text: "这些账号的 HTTP/SSE 业务请求缺票时会等待；打票失败或超时会拒绝该次业务请求。", em: true });
@@ -2471,11 +2505,13 @@ function doSaveDemand() {
     return withBusy(function () {
       return resAction("/ops/on-demand", {
         value: enabled ? "on" : "off", account: accounts, model: models,
-        attempts: String(maxAttempts), timeout: String(timeout)
+        attempts: String(maxAttempts), timeout: String(timeout),
+        refresh_on_312: refreshOn312 ? "on" : "off", refresh_cooldown: String(refreshCooldown)
       }).then(function (r) {
         demand.dirty = false;
         notify("ok", "按需打票已" + (r.on_demand ? "开启" : "关闭") +
           "，账号 " + strList(r.on_demand_accounts).length + " 个，模型 " + strList(r.on_demand_models).length + " 个，最多尝试 " + r.on_demand_max_attempts + " 次，" + r.on_demand_timeout_seconds + " 秒兜底。" +
+          " 312 自动刷新" + (r.refresh_on_312 ? ("已开启（" + r.refresh_on_312_cooldown_seconds + " 秒冷却）") : "已关闭") + "。" +
           (r.warning ? "\n警告：" + r.warning : ""));
         return fetchChoices(true).then(refresh);
       });
@@ -2749,6 +2785,14 @@ $("demandTimeout").addEventListener("input", function () {
 });
 $("demandAttempts").addEventListener("input", function () {
   demand.maxAttempts = Number($("demandAttempts").value);
+  demandEdited();
+});
+$("refreshOn312").addEventListener("change", function () {
+  demand.refreshOn312 = $("refreshOn312").checked;
+  demandEdited();
+});
+$("refreshOn312Cooldown").addEventListener("input", function () {
+  demand.refreshCooldown = Number($("refreshOn312Cooldown").value);
   demandEdited();
 });
 $("btnClearAll").addEventListener("click", doClearAll);

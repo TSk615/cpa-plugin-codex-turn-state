@@ -134,11 +134,13 @@ func TestDashboardCanPersistAndToggleOnDemand(t *testing.T) {
 	mustConfigure(t, cfg)
 
 	q := confirmed(url.Values{
-		"value":    {"on"},
-		"attempts": {"7"},
-		"timeout":  {"37"},
-		"account":  {"codex-one.json", "codex-two.json"},
-		"model":    {"gpt-5.6-sol", "gpt-6-astra"},
+		"value":            {"on"},
+		"attempts":         {"7"},
+		"timeout":          {"37"},
+		"refresh_on_312":   {"on"},
+		"refresh_cooldown": {"900"},
+		"account":          {"codex-one.json", "codex-two.json"},
+		"model":            {"gpt-5.6-sol", "gpt-6-astra"},
 	})
 	resp := driveResource(t, opsOnDemandPath, q)
 	if resp.StatusCode != http.StatusOK {
@@ -148,13 +150,15 @@ func TestDashboardCanPersistAndToggleOnDemand(t *testing.T) {
 	got := state.config
 	state.mu.Unlock()
 	if !got.OnDemand || got.OnDemandMaxAttempts != 7 || got.OnDemandTimeoutSeconds != 37 || len(got.OnDemandAccounts) != 2 ||
+		!got.RefreshOn312 || got.RefreshOn312Cooldown != 900 ||
 		!reflect.DeepEqual(got.OnDemandModels, []string{"gpt-5.6-sol", "gpt-6-astra"}) {
 		t.Fatalf("on-demand config = enabled=%v attempts=%d timeout=%d accounts=%v models=%v", got.OnDemand, got.OnDemandMaxAttempts, got.OnDemandTimeoutSeconds, got.OnDemandAccounts, got.OnDemandModels)
 	}
 	ov := readOverrideFile(t, dir)
 	if ov.OnDemand == nil || !*ov.OnDemand || ov.OnDemandAccounts == nil || len(*ov.OnDemandAccounts) != 2 ||
 		ov.OnDemandModels == nil || !reflect.DeepEqual(*ov.OnDemandModels, []string{"gpt-5.6-sol", "gpt-6-astra"}) ||
-		ov.OnDemandMaxAttempts == nil || *ov.OnDemandMaxAttempts != 7 {
+		ov.OnDemandMaxAttempts == nil || *ov.OnDemandMaxAttempts != 7 || ov.RefreshOn312 == nil || !*ov.RefreshOn312 ||
+		ov.RefreshOn312Cooldown == nil || *ov.RefreshOn312Cooldown != 900 {
 		t.Fatalf("runtime override did not persist on-demand settings: %+v", ov)
 	}
 

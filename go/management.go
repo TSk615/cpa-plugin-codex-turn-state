@@ -882,6 +882,8 @@ func handleOnDemandResource(q url.Values) pluginapi.ManagementResponse {
 	}
 	state.mu.Lock()
 	maxAttempts := state.config.OnDemandMaxAttempts
+	refreshOn312 := state.config.RefreshOn312
+	refreshCooldown := state.config.RefreshOn312Cooldown
 	state.mu.Unlock()
 	if raw := strings.TrimSpace(q.Get("attempts")); raw != "" {
 		var errAttempts error
@@ -893,6 +895,20 @@ func handleOnDemandResource(q url.Values) pluginapi.ManagementResponse {
 	timeout, errTimeout := strconv.Atoi(strings.TrimSpace(q.Get("timeout")))
 	if errTimeout != nil || timeout < 1 || timeout > 90 {
 		return managementError(http.StatusBadRequest, `"timeout" must be an integer between 1 and 90`)
+	}
+	if raw := strings.TrimSpace(q.Get("refresh_on_312")); raw != "" {
+		var okRefresh bool
+		refreshOn312, okRefresh = parseBoolParam(raw)
+		if !okRefresh {
+			return managementError(http.StatusBadRequest, `"refresh_on_312" must be on or off`)
+		}
+	}
+	if raw := strings.TrimSpace(q.Get("refresh_cooldown")); raw != "" {
+		var errCooldown error
+		refreshCooldown, errCooldown = strconv.Atoi(raw)
+		if errCooldown != nil || refreshCooldown < 60 || refreshCooldown > 3600 {
+			return managementError(http.StatusBadRequest, `"refresh_cooldown" must be an integer between 60 and 3600`)
+		}
 	}
 	accounts := make([]string, 0, len(q["account"]))
 	seen := make(map[string]bool, len(q["account"]))
@@ -924,6 +940,8 @@ func handleOnDemandResource(q url.Values) pluginapi.ManagementResponse {
 	cfg.OnDemandModels = models
 	cfg.OnDemandMaxAttempts = maxAttempts
 	cfg.OnDemandTimeoutSeconds = timeout
+	cfg.RefreshOn312 = refreshOn312
+	cfg.RefreshOn312Cooldown = refreshCooldown
 	if enabled {
 		if err := validateDemandConfig(cfg); err != nil {
 			state.mu.Unlock()
@@ -944,14 +962,16 @@ func handleOnDemandResource(q url.Values) pluginapi.ManagementResponse {
 		warning = "restart will revert: " + err.Error()
 		log.Printf(logPrefix+"on_demand updated but persistence failed: %v", err)
 	} else {
-		log.Printf(logPrefix+"on_demand=%t accounts=%d models=%d attempts=%d timeout=%ds via dashboard", enabled, len(accounts), len(models), maxAttempts, timeout)
+		log.Printf(logPrefix+"on_demand=%t accounts=%d models=%d attempts=%d timeout=%ds refresh_on_312=%t refresh_cooldown=%ds via dashboard", enabled, len(accounts), len(models), maxAttempts, timeout, refreshOn312, refreshCooldown)
 	}
 	return jsonResponse(http.StatusOK, map[string]any{
 		"on_demand": enabled, "on_demand_accounts": accounts,
-		"on_demand_models":          models,
-		"on_demand_max_attempts":    maxAttempts,
-		"on_demand_timeout_seconds": timeout,
-		"persisted":                 persisted, "warning": warning,
+		"on_demand_models":                models,
+		"on_demand_max_attempts":          maxAttempts,
+		"on_demand_timeout_seconds":       timeout,
+		"refresh_on_312":                  refreshOn312,
+		"refresh_on_312_cooldown_seconds": refreshCooldown,
+		"persisted":                       persisted, "warning": warning,
 	})
 }
 
@@ -1017,6 +1037,8 @@ type statusResponse struct {
 	OnDemandModels         []string       `json:"on_demand_models"`
 	OnDemandMaxAttempts    int            `json:"on_demand_max_attempts"`
 	OnDemandTimeoutSeconds int            `json:"on_demand_timeout_seconds"`
+	RefreshOn312           bool           `json:"refresh_on_312"`
+	RefreshOn312Cooldown   int            `json:"refresh_on_312_cooldown_seconds"`
 	Role                   string         `json:"role"`
 	DryRun                 bool           `json:"dry_run"`
 	InjectMode             string         `json:"inject_mode"`
@@ -1124,6 +1146,8 @@ func handleStatus() pluginapi.ManagementResponse {
 		OnDemandModels:         append([]string(nil), cfg.OnDemandModels...),
 		OnDemandMaxAttempts:    cfg.OnDemandMaxAttempts,
 		OnDemandTimeoutSeconds: cfg.OnDemandTimeoutSeconds,
+		RefreshOn312:           cfg.RefreshOn312,
+		RefreshOn312Cooldown:   cfg.RefreshOn312Cooldown,
 		Role:                   cfg.Role,
 		DryRun:                 cfg.DryRun,
 		InjectMode:             cfg.InjectMode,
@@ -1310,6 +1334,8 @@ type configResponse struct {
 	OnDemandModels         []string `json:"on_demand_models"`
 	OnDemandMaxAttempts    int      `json:"on_demand_max_attempts"`
 	OnDemandTimeoutSeconds int      `json:"on_demand_timeout_seconds"`
+	RefreshOn312           bool     `json:"refresh_on_312"`
+	RefreshOn312Cooldown   int      `json:"refresh_on_312_cooldown_seconds"`
 	Role                   string   `json:"role"`
 	StoreDir               string   `json:"store_dir"`
 	Models                 []string `json:"models"`
@@ -1342,6 +1368,8 @@ func handleConfig() pluginapi.ManagementResponse {
 		OnDemandModels:         append([]string(nil), cfg.OnDemandModels...),
 		OnDemandMaxAttempts:    cfg.OnDemandMaxAttempts,
 		OnDemandTimeoutSeconds: cfg.OnDemandTimeoutSeconds,
+		RefreshOn312:           cfg.RefreshOn312,
+		RefreshOn312Cooldown:   cfg.RefreshOn312Cooldown,
 		Role:                   cfg.Role,
 		StoreDir:               cfg.StoreDir,
 		Models:                 append([]string(nil), cfg.Models...),
